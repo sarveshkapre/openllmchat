@@ -138,3 +138,26 @@ Design direction: minimal, modern, calm, and precise. The interface should feel 
 - No visual element should look decorative without functional purpose.
 - Light and dark themes both maintain contrast and perceived depth.
 - Mobile layout keeps the same action order and does not hide critical controls.
+
+## 14) Source Of Truth For UI Implementation
+
+- Primary reference for styling and setup: https://ui.shadcn.com/docs/tailwind-v4
+- Primary reference for component patterns: https://ui.shadcn.com/docs/components
+- Primary reference for primitives/composition: https://www.radix-ui.com/primitives/docs
+- Local reference implementation: `/Users/sarvesh/code/ui/apps/v4`
+
+## 15) Mandatory Build Pattern (shadcn v4 + Radix)
+
+- Use Tailwind v4 CSS-first setup (`@import "tailwindcss"` and `@theme inline` tokens in `app/globals.css`).
+- Use `tw-animate-css` for animation utilities (do not use legacy `tailwindcss-animate` plugin setup).
+- Use official shadcn generated components from `components/ui/*`; avoid custom raw HTML controls when a matching shadcn component exists.
+- Use Radix-backed composition patterns (`asChild`, `Slot`, portal primitives, `data-slot` attributes) from generated components.
+- Keep `components.json` aligned with shadcn v4 conventions (`tailwind.config` empty, css variables enabled).
+
+## 16) UI Change Workflow (Every Feature)
+
+- Check the relevant shadcn v4 and Radix docs first.
+- Prefer `npx shadcn@latest add <component>` instead of hand-rolling primitives.
+- Keep design token changes in `app/globals.css`, not scattered inline.
+- Validate with `npm run build` before shipping.
+- If a component is customized, keep API-compatible wrappers so it can still be updated from shadcn registry later.

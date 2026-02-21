@@ -5,6 +5,14 @@ import { Moon, PanelLeft, PanelLeftClose, Plus, RefreshCcw, Sun, Trash2 } from "
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 
 const STORAGE_KEYS = {
@@ -15,9 +23,6 @@ const STORAGE_KEYS = {
   agentAPersona: "openllmchat:min:agentAPersona",
   agentBPersona: "openllmchat:min:agentBPersona"
 };
-
-const SELECT_CLASSNAME =
-  "h-9 min-w-[148px] rounded-lg border border-input/90 bg-background/90 px-3 text-sm shadow-sm outline-none focus:border-primary/60 focus:ring-2 focus:ring-ring/25";
 
 const PERSONA_PRESETS = [
   {
@@ -605,7 +610,7 @@ export default function HomePage() {
       <div className="flex h-screen bg-background/45 backdrop-blur-[2px]">
         <aside
           className={cn(
-            "hidden border-r border-border/60 bg-background/70 shadow-[8px_0_34px_-30px_hsl(var(--foreground)/0.45)] backdrop-blur-xl transition-all duration-300 ease-out md:flex md:flex-col",
+            "hidden border-r border-border/60 bg-background/70 shadow-[8px_0_34px_-30px_rgb(15_23_42/0.38)] backdrop-blur-xl transition-all duration-300 ease-out md:flex md:flex-col dark:shadow-[8px_0_36px_-28px_rgb(0_0_0/0.52)]",
             historyOpen ? "md:w-[300px]" : "md:w-16"
           )}
         >
@@ -627,7 +632,7 @@ export default function HomePage() {
               <>
                 <p className="text-xs text-muted-foreground">{historyStatus}</p>
                 <div className="flex items-center gap-1.5">
-                  <Button variant="secondary" className="flex-1 shadow-sm" onClick={onNewThread}>
+                  <Button variant="secondary" className="flex-1 shadow-xs" onClick={onNewThread}>
                     <Plus className="size-4" />
                     New conversation
                   </Button>
@@ -757,7 +762,7 @@ export default function HomePage() {
             <div className="mx-auto w-full max-w-5xl px-4 py-6 md:px-8">
               {messages.length === 0 ? (
                 <div className="mx-auto mt-16 max-w-2xl text-center">
-                  <h1 className="bg-gradient-to-r from-foreground to-foreground/70 bg-clip-text text-3xl font-semibold tracking-tight text-transparent">
+                  <h1 className="bg-linear-to-r from-foreground to-foreground/70 bg-clip-text text-3xl font-semibold tracking-tight text-transparent">
                     openllmchat
                   </h1>
                   <p className="mt-3 text-sm text-muted-foreground">
@@ -781,8 +786,8 @@ export default function HomePage() {
                             className={cn(
                               "rounded-2xl px-4 py-3 text-[15px] leading-7 tracking-[-0.01em] ring-1 ring-transparent",
                               isLeft
-                                ? "bg-background/88 text-card-foreground shadow-[0_14px_40px_-28px_hsl(var(--foreground)/0.52)] ring-border/70 backdrop-blur-sm"
-                                : "bg-gradient-to-br from-primary via-primary to-primary/85 text-primary-foreground shadow-[0_16px_48px_-28px_hsl(var(--primary)/0.9)]"
+                                ? "bg-background/88 text-card-foreground shadow-[0_14px_40px_-28px_rgb(15_23_42/0.5)] ring-border/70 backdrop-blur-xs dark:shadow-[0_16px_44px_-28px_rgb(0_0_0/0.58)]"
+                                : "bg-linear-to-br from-primary via-primary to-primary/85 text-primary-foreground shadow-[0_16px_48px_-28px_rgb(29_78_216/0.62)] dark:shadow-[0_16px_52px_-30px_rgb(37_99_235/0.48)]"
                             )}
                           >
                             {entry.text || ""}
@@ -800,7 +805,7 @@ export default function HomePage() {
                 <div className="pointer-events-auto">
                   <Button
                     variant="secondary"
-                    className="rounded-full border border-border/70 bg-background/85 shadow-[0_14px_35px_-22px_hsl(var(--foreground)/0.5)] backdrop-blur"
+                    className="rounded-full border border-border/70 bg-background/85 shadow-[0_14px_35px_-22px_rgb(15_23_42/0.4)] backdrop-blur-sm dark:shadow-[0_16px_38px_-22px_rgb(0_0_0/0.55)]"
                     onClick={() => {
                       setAutoScrollEnabled(true);
                       setShowJumpToBottom(false);
@@ -816,7 +821,7 @@ export default function HomePage() {
 
           <footer className="border-t border-border/60 bg-background/70 px-3 py-3 backdrop-blur-xl md:px-6">
             <form
-              className="mx-auto w-full max-w-5xl rounded-2xl border border-border/70 bg-background/88 p-3 shadow-[0_18px_52px_-30px_hsl(var(--foreground)/0.5)] backdrop-blur"
+              className="mx-auto w-full max-w-5xl rounded-2xl border border-border/70 bg-background/88 p-3 shadow-[0_18px_52px_-30px_rgb(15_23_42/0.4)] backdrop-blur-sm dark:shadow-[0_20px_56px_-30px_rgb(0_0_0/0.58)]"
               onSubmit={(event) => {
                 event.preventDefault();
                 if (!isRunning) {
@@ -824,14 +829,14 @@ export default function HomePage() {
                 }
               }}
             >
-              <textarea
+              <Textarea
                 value={topic}
                 onChange={(event) => setTopic(event.target.value)}
                 placeholder="Topic"
                 maxLength={180}
                 aria-label="Conversation topic"
                 rows={1}
-                className="max-h-24 w-full resize-none rounded-md border-0 bg-transparent px-2 py-2 text-[15px] leading-6 shadow-none outline-none placeholder:text-muted-foreground/80"
+                className="max-h-24 min-h-0 w-full resize-none border-0 bg-transparent px-2 py-2 text-[15px] leading-6 shadow-none focus-visible:border-transparent focus-visible:ring-0"
               />
               <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-border/60 pt-2">
                 <Input
@@ -841,32 +846,32 @@ export default function HomePage() {
                   value={turnsInput}
                   onChange={(event) => setTurnsInput(event.target.value)}
                   aria-label="Turns"
-                  className="h-9 w-20 bg-background/80 shadow-sm"
+                  className="h-9 w-20 bg-background/80 shadow-xs"
                 />
-                <select
-                  value={agentAPersona}
-                  onChange={(event) => setAgentAPersona(event.target.value)}
-                  className={SELECT_CLASSNAME}
-                  aria-label="Agent A persona"
-                >
-                  {PERSONA_PRESETS.map((preset) => (
-                    <option key={`agent-a-${preset.id}`} value={preset.id}>
-                      A: {preset.label}
-                    </option>
-                  ))}
-                </select>
-                <select
-                  value={agentBPersona}
-                  onChange={(event) => setAgentBPersona(event.target.value)}
-                  className={SELECT_CLASSNAME}
-                  aria-label="Agent B persona"
-                >
-                  {PERSONA_PRESETS.map((preset) => (
-                    <option key={`agent-b-${preset.id}`} value={preset.id}>
-                      B: {preset.label}
-                    </option>
-                  ))}
-                </select>
+                <Select value={agentAPersona} onValueChange={setAgentAPersona}>
+                  <SelectTrigger aria-label="Agent A persona" className="h-9 min-w-[156px] bg-background/80 shadow-xs">
+                    <SelectValue placeholder="A persona" />
+                  </SelectTrigger>
+                  <SelectContent align="start">
+                    {PERSONA_PRESETS.map((preset) => (
+                      <SelectItem key={`agent-a-${preset.id}`} value={preset.id}>
+                        A: {preset.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Select value={agentBPersona} onValueChange={setAgentBPersona}>
+                  <SelectTrigger aria-label="Agent B persona" className="h-9 min-w-[156px] bg-background/80 shadow-xs">
+                    <SelectValue placeholder="B persona" />
+                  </SelectTrigger>
+                  <SelectContent align="start">
+                    {PERSONA_PRESETS.map((preset) => (
+                      <SelectItem key={`agent-b-${preset.id}`} value={preset.id}>
+                        B: {preset.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
                 <div className="ml-auto flex items-center gap-2">
                   <p className="hidden max-w-[420px] truncate text-xs text-muted-foreground md:block">{status}</p>
                   {isRunning ? (
