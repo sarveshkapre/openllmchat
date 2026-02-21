@@ -932,6 +932,22 @@ async function finalizeMemory(conversationId, topic, newEntries, totalTurns) {
   }
 }
 
+function resolveConversationFromParams(req, res) {
+  const conversationId = sanitizeConversationId(req.params.id);
+  if (!conversationId) {
+    res.status(400).json({ error: "Conversation id is required." });
+    return null;
+  }
+
+  const conversation = getConversation(conversationId);
+  if (!conversation) {
+    res.status(404).json({ error: "Conversation not found." });
+    return null;
+  }
+
+  return { conversationId, conversation };
+}
+
 function cloneTranscriptEntries(entries) {
   return (entries || []).map((entry) => ({
     turn: entry.turn,
@@ -1119,15 +1135,11 @@ async function runConversationBatch({
 }
 
 app.get("/api/conversation/:id", (req, res) => {
-  const conversationId = sanitizeConversationId(req.params.id);
-  if (!conversationId) {
-    return res.status(400).json({ error: "Conversation id is required." });
+  const resolved = resolveConversationFromParams(req, res);
+  if (!resolved) {
+    return;
   }
-
-  const conversation = getConversation(conversationId);
-  if (!conversation) {
-    return res.status(404).json({ error: "Conversation not found." });
-  }
+  const { conversationId, conversation } = resolved;
 
   const transcript = getMessages(conversationId);
   const memory = getCompressedMemory(conversationId);
@@ -1152,15 +1164,11 @@ app.get("/api/conversation/:id", (req, res) => {
 
 app.post("/api/conversation/:id/fork", async (req, res) => {
   try {
-    const sourceConversationId = sanitizeConversationId(req.params.id);
-    if (!sourceConversationId) {
-      return res.status(400).json({ error: "Conversation id is required." });
+    const resolved = resolveConversationFromParams(req, res);
+    if (!resolved) {
+      return;
     }
-
-    const sourceConversation = getConversation(sourceConversationId);
-    if (!sourceConversation) {
-      return res.status(404).json({ error: "Conversation not found." });
-    }
+    const { conversationId: sourceConversationId, conversation: sourceConversation } = resolved;
 
     const allSourceMessages = getMessages(sourceConversationId);
     const maxTurn = allSourceMessages.length;
@@ -1233,15 +1241,11 @@ app.post("/api/conversation/:id/fork", async (req, res) => {
 });
 
 app.get("/api/conversation/:id/brief", (req, res) => {
-  const conversationId = sanitizeConversationId(req.params.id);
-  if (!conversationId) {
-    return res.status(400).json({ error: "Conversation id is required." });
+  const resolved = resolveConversationFromParams(req, res);
+  if (!resolved) {
+    return;
   }
-
-  const conversation = getConversation(conversationId);
-  if (!conversation) {
-    return res.status(404).json({ error: "Conversation not found." });
-  }
+  const { conversationId, conversation } = resolved;
 
   return res.json({
     conversationId,
@@ -1254,15 +1258,11 @@ app.get("/api/conversation/:id/brief", (req, res) => {
 });
 
 app.get("/api/conversation/:id/agents", (req, res) => {
-  const conversationId = sanitizeConversationId(req.params.id);
-  if (!conversationId) {
-    return res.status(400).json({ error: "Conversation id is required." });
+  const resolved = resolveConversationFromParams(req, res);
+  if (!resolved) {
+    return;
   }
-
-  const conversation = getConversation(conversationId);
-  if (!conversation) {
-    return res.status(404).json({ error: "Conversation not found." });
-  }
+  const { conversationId, conversation } = resolved;
 
   return res.json({
     conversationId,
@@ -1275,15 +1275,11 @@ app.get("/api/conversation/:id/agents", (req, res) => {
 });
 
 app.post("/api/conversation/:id/agents", (req, res) => {
-  const conversationId = sanitizeConversationId(req.params.id);
-  if (!conversationId) {
-    return res.status(400).json({ error: "Conversation id is required." });
+  const resolved = resolveConversationFromParams(req, res);
+  if (!resolved) {
+    return;
   }
-
-  const conversation = getConversation(conversationId);
-  if (!conversation) {
-    return res.status(404).json({ error: "Conversation not found." });
-  }
+  const { conversationId, conversation } = resolved;
 
   const currentAgents = mapStoredAgents(getConversationAgents(conversationId));
   const incomingAgents = parseAgentConfigFromBody(req.body);
@@ -1300,15 +1296,11 @@ app.post("/api/conversation/:id/agents", (req, res) => {
 });
 
 app.post("/api/conversation/:id/meta", (req, res) => {
-  const conversationId = sanitizeConversationId(req.params.id);
-  if (!conversationId) {
-    return res.status(400).json({ error: "Conversation id is required." });
+  const resolved = resolveConversationFromParams(req, res);
+  if (!resolved) {
+    return;
   }
-
-  const conversation = getConversation(conversationId);
-  if (!conversation) {
-    return res.status(404).json({ error: "Conversation not found." });
-  }
+  const { conversationId, conversation } = resolved;
 
   const parsedMeta = parseConversationMetaFromBody(req.body);
   const mergedMeta = mergeConversationMeta(conversation, req.body || {}, parsedMeta);
@@ -1325,15 +1317,11 @@ app.post("/api/conversation/:id/meta", (req, res) => {
 });
 
 app.post("/api/conversation/:id/brief", (req, res) => {
-  const conversationId = sanitizeConversationId(req.params.id);
-  if (!conversationId) {
-    return res.status(400).json({ error: "Conversation id is required." });
+  const resolved = resolveConversationFromParams(req, res);
+  if (!resolved) {
+    return;
   }
-
-  const conversation = getConversation(conversationId);
-  if (!conversation) {
-    return res.status(404).json({ error: "Conversation not found." });
-  }
+  const { conversationId, conversation } = resolved;
 
   const currentBrief = getConversationBrief(conversationId);
   const parsedBrief = parseBriefFromBody(req.body);
@@ -1351,15 +1339,11 @@ app.post("/api/conversation/:id/brief", (req, res) => {
 });
 
 app.get("/api/conversation/:id/memory", (req, res) => {
-  const conversationId = sanitizeConversationId(req.params.id);
-  if (!conversationId) {
-    return res.status(400).json({ error: "Conversation id is required." });
+  const resolved = resolveConversationFromParams(req, res);
+  if (!resolved) {
+    return;
   }
-
-  const conversation = getConversation(conversationId);
-  if (!conversation) {
-    return res.status(404).json({ error: "Conversation not found." });
-  }
+  const { conversationId, conversation } = resolved;
 
   const memory = getCompressedMemory(conversationId);
   const brief = getConversationBrief(conversationId);
@@ -1377,15 +1361,11 @@ app.get("/api/conversation/:id/memory", (req, res) => {
 });
 
 app.get("/api/conversation/:id/insights", (req, res) => {
-  const conversationId = sanitizeConversationId(req.params.id);
-  if (!conversationId) {
-    return res.status(400).json({ error: "Conversation id is required." });
+  const resolved = resolveConversationFromParams(req, res);
+  if (!resolved) {
+    return;
   }
-
-  const conversation = getConversation(conversationId);
-  if (!conversation) {
-    return res.status(404).json({ error: "Conversation not found." });
-  }
+  const { conversationId, conversation } = resolved;
 
   const brief = getConversationBrief(conversationId);
   const mode = sanitizeConversationMode(conversation.mode, "exploration");
