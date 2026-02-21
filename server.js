@@ -730,6 +730,68 @@ function buildInsightSnapshot({ topic, brief, mode, memory }) {
   };
 }
 
+function buildObjectiveScore({ topic, brief, memory, transcript, insights }) {
+  const recentText = (transcript || [])
+    .slice(-10)
+    .map((entry) => entry.text)
+    .join(" ");
+  const recentTokens = tokenSet(recentText);
+  const objectiveSource = [topic, brief?.objective, brief?.doneCriteria].filter(Boolean).join(" ");
+  const objectiveKeywords = [...tokenSet(objectiveSource)].slice(0, 30);
+
+  let objectiveCoverage = 0;
+  if (objectiveKeywords.length === 0) {
+    objectiveCoverage = 1;
+  } else {
+    let matched = 0;
+    for (const keyword of objectiveKeywords) {
+      if (recentTokens.has(keyword)) {
+        matched += 1;
+      }
+    }
+    objectiveCoverage = matched / Math.max(1, objectiveKeywords.length);
+  }
+
+  const decisionMomentum = Math.min(1, Number(memory?.stats?.decisionCount || 0) / 4);
+  const openQuestionPressure = Math.min(1, Number(memory?.stats?.openQuestionCount || 0) / 6);
+  const lastTurn = transcript?.[transcript.length - 1]?.text || "";
+  const doneSignal = brief?.doneCriteria ? jaccardSimilarity(brief.doneCriteria, lastTurn) : objectiveCoverage;
+  const resolution = 1 - openQuestionPressure;
+
+  const raw =
+    objectiveCoverage * 0.34 + decisionMomentum * 0.28 + doneSignal * 0.23 + resolution * 0.15;
+  const overall = Number(clamp(raw, 0, 1).toFixed(4));
+
+  const stage =
+    overall >= 0.8
+      ? "near_done"
+      : overall >= 0.6
+        ? "converging"
+        : overall >= 0.35
+          ? "developing"
+          : "early";
+
+  const nextAction =
+    insights?.nextSteps?.[0] ||
+    (brief?.doneCriteria
+      ? `Drive directly toward done criteria: ${brief.doneCriteria}`
+      : "Increase specificity with one concrete next step.");
+
+  return {
+    overall,
+    stage,
+    components: {
+      objectiveCoverage: Number(objectiveCoverage.toFixed(4)),
+      decisionMomentum: Number(decisionMomentum.toFixed(4)),
+      doneSignal: Number(doneSignal.toFixed(4)),
+      resolution: Number(resolution.toFixed(4))
+    },
+    openQuestions: Number(memory?.stats?.openQuestionCount || 0),
+    decisions: Number(memory?.stats?.decisionCount || 0),
+    nextAction
+  };
+}
+
 function parseJsonObject(text) {
   if (!text) {
     return null;
@@ -1385,6 +1447,34 @@ app.get("/api/conversation/:id/insights", (req, res) => {
   });
 
   return res.json(withConversationMeta(conversationId, conversation, { mode, insights }));
+});
+
+app.get("/api/conversation/:id/score", (req, res) => {
+  const resolved = resolveConversationFromParams(req, res);
+  if (!resolved) {
+    return;
+  }
+  const { conversationId, conversation } = resolved;
+
+  const transcript = getMessages(conversationId);
+  const brief = getConversationBrief(conversationId);
+  const mode = sanitizeConversationMode(conversation.mode, "exploration");
+  const memory = getCompressedMemory(conversationId);
+  const insights = buildInsightSnapshot({
+    topic: conversation.topic,
+    brief,
+    mode,
+    memory
+  });
+  const score = buildObjectiveScore({
+    topic: conversation.topic,
+    brief,
+    memory,
+    transcript,
+    insights
+  });
+
+  return res.json(withConversationMeta(conversationId, conversation, { brief, score }));
 });
 
 app.get("/api/conversations", (req, res) => {

@@ -14,6 +14,7 @@ const historySearchInput = document.querySelector("#history-search");
 const refreshMemoryBtn = document.querySelector("#refresh-memory-btn");
 const refreshInsightsBtn = document.querySelector("#refresh-insights-btn");
 const copyInsightsBtn = document.querySelector("#copy-insights-btn");
+const refreshScoreBtn = document.querySelector("#refresh-score-btn");
 const openBestLabBtn = document.querySelector("#open-best-lab-btn");
 const adoptBestModeBtn = document.querySelector("#adopt-best-mode-btn");
 const copyLabReportBtn = document.querySelector("#copy-lab-report-btn");
@@ -33,6 +34,7 @@ const statusEl = document.querySelector("#status");
 const engineChipEl = document.querySelector("#engine-chip");
 const memoryChipEl = document.querySelector("#memory-chip");
 const qualityChipEl = document.querySelector("#quality-chip");
+const goalChipEl = document.querySelector("#goal-chip");
 const modeChipEl = document.querySelector("#mode-chip");
 const historyListEl = document.querySelector("#history-list");
 const historyStatusEl = document.querySelector("#history-status");
@@ -44,6 +46,9 @@ const insightStatusEl = document.querySelector("#insight-status");
 const insightDecisionsListEl = document.querySelector("#insight-decisions-list");
 const insightQuestionsListEl = document.querySelector("#insight-questions-list");
 const insightNextStepsListEl = document.querySelector("#insight-next-steps-list");
+const scoreStatusEl = document.querySelector("#score-status");
+const scoreFillEl = document.querySelector("#score-fill");
+const scoreComponentsListEl = document.querySelector("#score-components-list");
 const labStatusEl = document.querySelector("#lab-status");
 const labResultsListEl = document.querySelector("#lab-results-list");
 
@@ -74,6 +79,7 @@ let activeMode = DEFAULT_THREAD_MODE;
 let displayedTranscript = [];
 let memoryState = null;
 let qualityState = null;
+let scoreState = null;
 let memoryInspectorState = null;
 let insightState = null;
 let labResultsState = [];
@@ -235,6 +241,19 @@ function setLabStatus(text) {
   labStatusEl.textContent = text;
 }
 
+function setScoreStatus(text) {
+  scoreStatusEl.textContent = text;
+}
+
+function setGoalChip(score) {
+  if (!score) {
+    goalChipEl.textContent = "Goal: waiting";
+    return;
+  }
+
+  goalChipEl.textContent = `Goal: ${(Number(score.overall || 0) * 100).toFixed(0)} • ${score.stage || "early"}`;
+}
+
 function bestLabRun() {
   if (!labResultsState.length) {
     return null;
@@ -271,6 +290,15 @@ function clearInsightSnapshot(message = "Start or restore a thread to compute in
   insightQuestionsListEl.appendChild(createListEmpty("No open questions yet."));
   insightNextStepsListEl.appendChild(createListEmpty("No next steps yet."));
   setInsightStatus(message);
+}
+
+function clearScorecard(message = "Start or restore a thread to score progress.") {
+  scoreState = null;
+  scoreFillEl.style.width = "0%";
+  scoreComponentsListEl.innerHTML = "";
+  scoreComponentsListEl.appendChild(createListEmpty("No score yet."));
+  setScoreStatus(message);
+  setGoalChip(null);
 }
 
 function clearLabResults(message = "Run lab to compare exploration, debate, and synthesis threads.") {
@@ -488,6 +516,82 @@ async function refreshInsightSnapshot() {
     renderInsightSnapshot(result);
   } catch (error) {
     clearInsightSnapshot("Insights unavailable.");
+  }
+}
+
+function renderScoreItems(score) {
+  scoreComponentsListEl.innerHTML = "";
+  const components = score?.components || {};
+  const entries = [
+    ["Objective coverage", components.objectiveCoverage],
+    ["Decision momentum", components.decisionMomentum],
+    ["Done signal", components.doneSignal],
+    ["Resolution", components.resolution]
+  ];
+
+  for (const [label, value] of entries) {
+    const li = document.createElement("li");
+    li.className = "memory-item";
+
+    const title = document.createElement("span");
+    title.className = "memory-item-title";
+    title.textContent = label;
+
+    const meta = document.createElement("span");
+    meta.className = "memory-item-meta";
+    meta.textContent = `${(Number(value || 0) * 100).toFixed(0)}%`;
+
+    li.appendChild(title);
+    li.appendChild(meta);
+    scoreComponentsListEl.appendChild(li);
+  }
+
+  if (score?.nextAction) {
+    const li = document.createElement("li");
+    li.className = "memory-item";
+    const title = document.createElement("span");
+    title.className = "memory-item-title";
+    title.textContent = `Next action: ${score.nextAction}`;
+    li.appendChild(title);
+    scoreComponentsListEl.appendChild(li);
+  }
+}
+
+function renderScorecard(payload) {
+  const score = payload?.score || null;
+  scoreState = score;
+  if (!score) {
+    clearScorecard("No score available.");
+    return;
+  }
+
+  const pct = Math.max(0, Math.min(100, Number(score.overall || 0) * 100));
+  scoreFillEl.style.width = `${pct.toFixed(1)}%`;
+  renderScoreItems(score);
+  setScoreStatus(
+    `${score.stage || "early"} • decisions ${Number(score.decisions || 0)} • open questions ${Number(
+      score.openQuestions || 0
+    )}`
+  );
+  setGoalChip(score);
+}
+
+async function refreshScorecard() {
+  if (!activeConversationId) {
+    clearScorecard();
+    return;
+  }
+
+  setScoreStatus("Refreshing score...");
+  try {
+    const response = await fetch(`/api/conversation/${encodeURIComponent(activeConversationId)}/score`);
+    const result = await response.json();
+    if (!response.ok) {
+      throw new Error(result.error || "Could not refresh score");
+    }
+    renderScorecard(result);
+  } catch (error) {
+    clearScorecard("Score unavailable.");
   }
 }
 
@@ -884,6 +988,7 @@ async function forkConversation(turn) {
     setStatus(`Fork created from turn ${result.forkFromTurn}. Now on new thread.`);
     await refreshMemoryInspector();
     await refreshInsightSnapshot();
+    await refreshScorecard();
     await loadHistory();
   } catch (error) {
     setStatus(error.message || "Could not fork conversation.");
@@ -982,6 +1087,7 @@ async function loadConversation(conversationId) {
   setQualityChip(null);
   await refreshMemoryInspector();
   await refreshInsightSnapshot();
+  await refreshScorecard();
 }
 
 function getVisibleConversations(conversations) {
@@ -1137,6 +1243,7 @@ async function restoreConversation() {
     clearMemoryInspector();
     clearInsightSnapshot();
     clearLabResults();
+    clearScorecard();
     return;
   }
 
@@ -1156,6 +1263,7 @@ async function restoreConversation() {
     clearMemoryInspector();
     clearInsightSnapshot();
     clearLabResults();
+    clearScorecard();
   }
 }
 
@@ -1200,6 +1308,7 @@ clearBtn.addEventListener("click", async () => {
   clearMemoryInspector();
   clearInsightSnapshot();
   clearLabResults();
+  clearScorecard();
   await loadHistory();
 });
 
@@ -1209,6 +1318,10 @@ refreshMemoryBtn.addEventListener("click", async () => {
 
 refreshInsightsBtn.addEventListener("click", async () => {
   await refreshInsightSnapshot();
+});
+
+refreshScoreBtn.addEventListener("click", async () => {
+  await refreshScorecard();
 });
 
 labBtn.addEventListener("click", async () => {
@@ -1491,6 +1604,7 @@ form.addEventListener("submit", async (event) => {
     clearMemoryInspector("Switched topic. Memory will rebuild for the new thread.");
     clearInsightSnapshot("Switched topic. Insights will rebuild for the new thread.");
     clearLabResults("Switched topic. Run Discovery Lab again for this topic.");
+    clearScorecard("Switched topic. Score will rebuild for the new thread.");
   }
 
   const conversationId = activeConversationId || undefined;
@@ -1669,6 +1783,7 @@ form.addEventListener("submit", async (event) => {
     );
     await refreshMemoryInspector();
     await refreshInsightSnapshot();
+    await refreshScorecard();
     await loadHistory();
   } catch (error) {
     if (String(error.message || "").toLowerCase().includes("not found")) {
@@ -1678,6 +1793,7 @@ form.addEventListener("submit", async (event) => {
       clearMemoryInspector();
       clearInsightSnapshot();
       clearLabResults();
+      clearScorecard();
       await loadHistory();
     }
 
@@ -1696,6 +1812,7 @@ setAgentFields(null);
 clearMemoryInspector();
 clearInsightSnapshot();
 clearLabResults();
+clearScorecard();
 restoreDraftState();
 
 (async () => {

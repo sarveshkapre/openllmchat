@@ -117,6 +117,7 @@
           <span class="chip" id="engine-chip">Engine: waiting</span>
           <span class="chip" id="memory-chip">Memory: waiting</span>
           <span class="chip" id="quality-chip">Quality: waiting</span>
+          <span class="chip" id="goal-chip">Goal: waiting</span>
           <span class="chip" id="mode-chip">Mode: exploration</span>
           <span class="chip">Ctrl/Cmd+Enter run • Ctrl/Cmd+S save</span>
         </div>
@@ -204,6 +205,17 @@
               Run lab to compare exploration, debate, and synthesis threads.
             </p>
             <ul id="lab-results-list" class="memory-list"></ul>
+          </section>
+          <section class="insight-panel">
+            <div class="memory-inspector-topbar">
+              <h3>Objective Scorecard</h3>
+              <button id="refresh-score-btn" class="secondary" type="button">Refresh score</button>
+            </div>
+            <p id="score-status" class="memory-inspector-status">Start or restore a thread to score progress.</p>
+            <div class="score-track">
+              <div id="score-fill" class="score-fill"></div>
+            </div>
+            <ul id="score-components-list" class="memory-list"></ul>
           </section>
         </section>
       </section>

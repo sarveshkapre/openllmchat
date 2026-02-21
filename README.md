@@ -41,6 +41,10 @@ Modern web app where two AI agents discuss a user topic in 10-turn batches while
   - key decisions
   - unresolved questions
   - concrete next steps
+- Objective Scorecard panel:
+  - progress percentage toward completion
+  - component breakdown (coverage, decisions, done signal, resolution)
+  - one prioritized next action
 - Discovery Lab one-click experiment runner:
   - runs `exploration`, `debate`, and `synthesis` threads in one request
   - returns side-by-side quality + insight summaries
@@ -223,6 +227,16 @@ Returns an actionable insight snapshot derived from compressed memory:
 - open questions
 - next steps
 - insight stats
+
+### `GET /api/conversation/:id/score`
+
+Returns an objective progress scorecard derived from brief + transcript + memory:
+
+- `overall` score (0-1)
+- `stage` (`early`, `developing`, `converging`, `near_done`)
+- component scores (`objectiveCoverage`, `decisionMomentum`, `doneSignal`, `resolution`)
+- decision/open-question counts
+- prioritized `nextAction`
 
 ### `GET /api/conversations?limit=30`
 

@@ -622,6 +622,22 @@ h2 {
   line-height: 1.1;
 }
 
+.score-track {
+  height: 0.6rem;
+  border-radius: 999px;
+  border: 1px solid rgba(125, 186, 214, 0.24);
+  background: rgba(7, 18, 28, 0.9);
+  overflow: hidden;
+  margin-bottom: 0.55rem;
+}
+
+.score-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #57d4ad, #86e69a);
+  transition: width 180ms ease;
+}
+
 @keyframes reveal-up {
   from {
     opacity: 0;
