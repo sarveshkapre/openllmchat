@@ -5,8 +5,9 @@
   "type": "module",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "NODE_ENV=development node --watch server.js",
+    "build": "next build",
+    "start": "NODE_ENV=production node server.js"
   },
   "keywords": [
     "ai",
@@ -17,9 +18,19 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "autoprefixer": "^10.4.24",
     "better-sqlite3": "^12.6.2",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
     "dotenv": "^16.5.0",
     "express": "^4.21.2",
-    "openai": "^5.13.1"
+    "lucide-react": "^0.575.0",
+    "next": "^16.1.6",
+    "openai": "^5.13.1",
+    "postcss": "^8.5.6",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "tailwind-merge": "^3.5.0",
+    "tailwindcss": "^3.4.17"
   }
 }

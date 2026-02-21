@@ -1,0 +1,53 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: 42 32% 98%;
+  --foreground: 210 22% 12%;
+  --card: 0 0% 100%;
+  --card-foreground: 210 22% 12%;
+  --muted: 45 20% 94%;
+  --muted-foreground: 215 15% 42%;
+  --border: 38 22% 87%;
+  --input: 38 22% 87%;
+  --primary: 205 93% 36%;
+  --primary-foreground: 0 0% 100%;
+  --ring: 205 93% 36%;
+}
+
+.dark {
+  --background: 223 19% 8%;
+  --foreground: 210 25% 93%;
+  --card: 223 17% 12%;
+  --card-foreground: 210 25% 93%;
+  --muted: 222 14% 18%;
+  --muted-foreground: 215 18% 66%;
+  --border: 220 13% 22%;
+  --input: 220 13% 22%;
+  --primary: 195 98% 67%;
+  --primary-foreground: 222 24% 10%;
+  --ring: 195 98% 67%;
+}
+
+* {
+  @apply border-border;
+}
+
+body {
+  @apply bg-background text-foreground antialiased;
+}
+
+.thread-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: hsl(var(--muted-foreground) / 0.4) transparent;
+}
+
+.thread-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+
+.thread-scroll::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: hsl(var(--muted-foreground) / 0.3);
+}

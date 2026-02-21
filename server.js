@@ -1,5 +1,6 @@
 import dotenv from "dotenv";
 import express from "express";
+import next from "next";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID, timingSafeEqual } from "node:crypto";
@@ -35,6 +36,9 @@ const app = express();
 const port = process.env.PORT || 3000;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const isDev = process.env.NODE_ENV !== "production";
+const nextApp = next({ dev: isDev, dir: __dirname });
+const nextHandler = nextApp.getRequestHandler();
 
 app.disable("x-powered-by");
 app.use(express.json({ limit: "32kb" }));
@@ -48,11 +52,11 @@ app.use((req, res, next) => {
     "Content-Security-Policy",
     [
       "default-src 'self'",
-      "script-src 'self'",
+      isDev ? "script-src 'self' 'unsafe-inline' 'unsafe-eval'" : "script-src 'self' 'unsafe-inline'",
       "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
       "font-src 'self' https://fonts.gstatic.com",
       "img-src 'self' data:",
-      "connect-src 'self'",
+      "connect-src 'self' ws: wss:",
       "base-uri 'self'",
       "form-action 'self'",
       "frame-ancestors 'none'"
@@ -60,7 +64,6 @@ app.use((req, res, next) => {
   );
   next();
 });
-app.use(express.static(path.join(__dirname, "public")));
 
 const DEFAULT_AGENTS = [
   {
@@ -2538,7 +2541,23 @@ app.use((error, req, res, next) => {
   return res.status(500).json({ error: "Internal server error." });
 });
 
-app.listen(port, () => {
-  console.log(`openllmchat running on http://localhost:${port}`);
-  console.log(`SQLite database: ${dbPath}`);
+app.all("*", (req, res, next) => {
+  if (req.path.startsWith("/api/")) {
+    return next();
+  }
+  return nextHandler(req, res);
+});
+
+async function startServer() {
+  await nextApp.prepare();
+  app.listen(port, () => {
+    console.log(`openllmchat running on http://localhost:${port}`);
+    console.log(`SQLite database: ${dbPath}`);
+    console.log(`UI: Next.js (${isDev ? "dev" : "prod"})`);
+  });
+}
+
+startServer().catch((error) => {
+  console.error("Failed to start server:", error);
+  process.exit(1);
 });

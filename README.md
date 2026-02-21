@@ -4,6 +4,7 @@ Modern web app where two AI agents discuss a user topic for user-selected turn c
 
 ## Features
 
+- Next.js UI built with Tailwind CSS and shadcn-style components.
 - Minimal UI with only 3 core actions: run conversation (topic + turns), switch light/dark theme, and use a collapsible thread history sidebar.
 - Two agent personas that alternate each turn with live streaming output.
 - Persistent conversation state in SQLite.
@@ -21,10 +22,17 @@ Modern web app where two AI agents discuss a user topic for user-selected turn c
 ```bash
 npm install
 cp .env.example .env
-npm start
+npm run dev
 ```
 
 Open `http://localhost:3000`.
+
+Production:
+
+```bash
+npm run build
+npm start
+```
 
 ## Environment
 
