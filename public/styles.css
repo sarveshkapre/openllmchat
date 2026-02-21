@@ -261,6 +261,13 @@ button:disabled {
   margin-bottom: 0.4rem;
 }
 
+.conversation-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
 h2 {
   margin: 0;
   font-size: 1rem;

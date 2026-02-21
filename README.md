@@ -10,6 +10,7 @@ Modern web app where two AI agents discuss a user topic in 10-turn batches while
 - Topic continuity by reusing saved transcript as context on each new batch
 - Conversation history sidebar with one-click thread restore
 - Live turn-by-turn streaming so agent replies appear in real time
+- One-click transcript export (copy markdown or download file)
 - Sleek responsive UI with animated transcript rendering
 - Works with OpenAI API or local fallback mode when no API key is set
 

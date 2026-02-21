@@ -2,6 +2,8 @@ const form = document.querySelector("#conversation-form");
 const topicInput = document.querySelector("#topic");
 const startBtn = document.querySelector("#start-btn");
 const clearBtn = document.querySelector("#clear-btn");
+const copyBtn = document.querySelector("#copy-btn");
+const downloadBtn = document.querySelector("#download-btn");
 const refreshHistoryBtn = document.querySelector("#refresh-history-btn");
 const transcriptEl = document.querySelector("#transcript");
 const statusEl = document.querySelector("#status");
@@ -14,6 +16,7 @@ const TOPIC_KEY = "openllmchat:topic";
 
 let activeConversationId = localStorage.getItem(CONVERSATION_ID_KEY) || "";
 let activeTopic = localStorage.getItem(TOPIC_KEY) || "";
+let displayedTranscript = [];
 
 function setStatus(text) {
   statusEl.textContent = text;
@@ -39,6 +42,7 @@ function clearConversationState() {
 
 function renderEmpty(message = "No messages yet.") {
   transcriptEl.innerHTML = "";
+  displayedTranscript = [];
   const empty = document.createElement("li");
   empty.className = "empty";
   empty.textContent = message;
@@ -86,7 +90,39 @@ function appendMessage(entry, animate = true) {
   }
 
   transcriptEl.appendChild(item);
+  displayedTranscript.push(entry);
   item.scrollIntoView({ behavior: animate ? "smooth" : "auto", block: "nearest" });
+}
+
+function slugify(value) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9\\s-]/g, "")
+    .trim()
+    .replace(/\\s+/g, "-")
+    .slice(0, 40);
+}
+
+function toMarkdownTranscript() {
+  const titleTopic = activeTopic || topicInput.value.trim() || "Untitled topic";
+  const lines = [
+    `# openllmchat transcript`,
+    ``,
+    `- Topic: ${titleTopic}`,
+    `- Conversation ID: ${activeConversationId || "n/a"}`,
+    `- Total turns: ${displayedTranscript.length}`,
+    ``,
+    `## Turns`,
+    ``
+  ];
+
+  for (const entry of displayedTranscript) {
+    lines.push(`### Turn ${entry.turn} - ${entry.speaker}`);
+    lines.push(entry.text);
+    lines.push("");
+  }
+
+  return lines.join("\\n");
 }
 
 function formatUpdatedAt(iso) {
@@ -118,6 +154,7 @@ async function loadConversation(conversationId) {
     renderEmpty();
   } else {
     transcriptEl.innerHTML = "";
+    displayedTranscript = [];
     for (const entry of result.transcript) {
       appendMessage(entry, false);
     }
@@ -230,6 +267,44 @@ clearBtn.addEventListener("click", async () => {
   await loadHistory();
 });
 
+copyBtn.addEventListener("click", async () => {
+  if (!displayedTranscript.length) {
+    setStatus("No transcript to copy yet.");
+    return;
+  }
+
+  const markdown = toMarkdownTranscript();
+
+  try {
+    await navigator.clipboard.writeText(markdown);
+    setStatus("Transcript copied as markdown.");
+  } catch (error) {
+    setStatus("Clipboard blocked. Use Download instead.");
+  }
+});
+
+downloadBtn.addEventListener("click", () => {
+  if (!displayedTranscript.length) {
+    setStatus("No transcript to download yet.");
+    return;
+  }
+
+  const markdown = toMarkdownTranscript();
+  const blob = new Blob([markdown], { type: "text/markdown;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const topicSlug = slugify(activeTopic || topicInput.value || "chat");
+  const fileName = `${topicSlug || "chat"}-transcript.md`;
+
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+  setStatus(`Downloaded ${fileName}`);
+});
+
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
 
@@ -243,12 +318,14 @@ form.addEventListener("submit", async (event) => {
   if (switchingTopic) {
     clearConversationState();
     transcriptEl.innerHTML = "";
+    displayedTranscript = [];
   }
 
   const conversationId = activeConversationId || undefined;
 
   if (!conversationId) {
     transcriptEl.innerHTML = "";
+    displayedTranscript = [];
   }
 
   startBtn.disabled = true;
