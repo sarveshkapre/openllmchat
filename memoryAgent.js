@@ -5,14 +5,17 @@ import {
   getMessagesInRange,
   getRecentSummaries,
   getRecentTierSummaries,
+  getTopAgentMemoryTokens,
   getTopMemoryTokens,
   getTopSemanticItems,
   insertTierSummary,
   insertSummary,
+  pruneAgentMemoryTokens,
   pruneConflictLedger,
   pruneMemoryTokens,
   pruneSemanticItems,
   upsertConflictLedger,
+  upsertAgentMemoryTokens,
   upsertMemoryTokens,
   upsertSemanticItems
 } from "./db.js";
@@ -122,7 +125,22 @@ const STOP_WORDS = new Set([
   "dont",
   "cant",
   "wont",
-  "lets"
+  "lets",
+  "ok",
+  "okay",
+  "yeah",
+  "yep",
+  "nope",
+  "hmm",
+  "huh",
+  "right",
+  "well",
+  "one",
+  "two",
+  "three",
+  "first",
+  "second",
+  "third"
 ]);
 
 function readIntEnv(name, fallback, min, max) {
@@ -133,6 +151,8 @@ function readIntEnv(name, fallback, min, max) {
 
 const MEMORY_TOKEN_KEEP_LIMIT = readIntEnv("MEMORY_TOKEN_KEEP_LIMIT", 180, 50, 500);
 const MEMORY_PROMPT_TOKEN_LIMIT = readIntEnv("MEMORY_PROMPT_TOKEN_LIMIT", 50, 10, 200);
+const MEMORY_AGENT_TOKEN_KEEP_LIMIT = readIntEnv("MEMORY_AGENT_TOKEN_KEEP_LIMIT", 120, 40, 400);
+const MEMORY_PROMPT_AGENT_TOKEN_LIMIT = readIntEnv("MEMORY_PROMPT_AGENT_TOKEN_LIMIT", 16, 4, 80);
 const MEMORY_SUMMARY_LIMIT = readIntEnv("MEMORY_SUMMARY_LIMIT", 6, 1, 30);
 const MEMORY_SUMMARY_WINDOW_TURNS = readIntEnv("MEMORY_SUMMARY_WINDOW_TURNS", 40, 10, 200);
 const MEMORY_MIN_TURNS_FOR_SUMMARY = readIntEnv("MEMORY_MIN_TURNS_FOR_SUMMARY", 40, 10, 400);
@@ -645,6 +665,35 @@ function updateHighValueTokens(conversationId, entries) {
   pruneMemoryTokens(conversationId, MEMORY_TOKEN_KEEP_LIMIT);
 }
 
+function updateAgentHighValueTokens(conversationId, entries) {
+  const grouped = new Map();
+
+  for (const entry of entries || []) {
+    const speakerId = String(entry?.speakerId || "").trim();
+    if (!speakerId) {
+      continue;
+    }
+
+    const tokenEntries = extractTokenEntries(entry.text, entry.turn);
+    if (!tokenEntries.length) {
+      continue;
+    }
+
+    const existing = grouped.get(speakerId) || [];
+    existing.push(...tokenEntries);
+    grouped.set(speakerId, existing);
+  }
+
+  for (const [speakerId, rawEntries] of grouped.entries()) {
+    const tokenEntries = collapseTokenEntries(rawEntries);
+    if (!tokenEntries.length) {
+      continue;
+    }
+    upsertAgentMemoryTokens(conversationId, speakerId, tokenEntries);
+    pruneAgentMemoryTokens(conversationId, speakerId, MEMORY_AGENT_TOKEN_KEEP_LIMIT);
+  }
+}
+
 function updateSemanticMemory(conversationId, entries) {
   const semanticEntries = extractSemanticEntries(entries);
   if (semanticEntries.length) {
@@ -685,8 +734,15 @@ async function maybeCreateSummaries({ conversationId, topic, totalTurns, client,
 
 async function bootstrapMemoryIfNeeded({ conversationId, topic, transcript, client, model }) {
   const stats = getMemoryStats(conversationId);
+  const hasAgentTokenSeed =
+    getTopAgentMemoryTokens(conversationId, "agent-a", 1).length > 0 ||
+    getTopAgentMemoryTokens(conversationId, "agent-b", 1).length > 0;
   if (stats.tokenCount === 0 && transcript.length > 0) {
     updateHighValueTokens(conversationId, transcript);
+  }
+
+  if (!hasAgentTokenSeed && transcript.length > 0) {
+    updateAgentHighValueTokens(conversationId, transcript);
   }
 
   if (stats.semanticCount === 0 && transcript.length > 0) {
@@ -717,6 +773,7 @@ async function bootstrapMemoryIfNeeded({ conversationId, topic, transcript, clie
 async function runMemoryAgent({ conversationId, topic, newEntries, totalTurns, client, model }) {
   if (newEntries.length > 0) {
     updateHighValueTokens(conversationId, newEntries);
+    updateAgentHighValueTokens(conversationId, newEntries);
     updateSemanticMemory(conversationId, newEntries);
   }
 
@@ -749,6 +806,10 @@ function groupSemanticItems(semantic) {
 
 function getCompressedMemory(conversationId) {
   const tokens = getTopMemoryTokens(conversationId, MEMORY_PROMPT_TOKEN_LIMIT);
+  const agentTokens = {
+    "agent-a": getTopAgentMemoryTokens(conversationId, "agent-a", MEMORY_PROMPT_AGENT_TOKEN_LIMIT),
+    "agent-b": getTopAgentMemoryTokens(conversationId, "agent-b", MEMORY_PROMPT_AGENT_TOKEN_LIMIT)
+  };
   const summaries = getRecentSummaries(conversationId, MEMORY_SUMMARY_LIMIT);
   const mesoSummaries = getRecentTierSummaries(conversationId, "meso", MEMORY_PROMPT_MESO_LIMIT);
   const macroSummaries = getRecentTierSummaries(conversationId, "macro", MEMORY_PROMPT_MACRO_LIMIT);
@@ -758,6 +819,7 @@ function getCompressedMemory(conversationId) {
 
   return {
     tokens,
+    agentTokens,
     summaries,
     tierSummaries: {
       micro: summaries,
@@ -781,9 +843,21 @@ function formatSemanticLines(items) {
     .join("\n");
 }
 
-function buildContextBlock({ topic, transcript, memory, moderatorDirective, charter, brief }) {
+function formatAgentTokenLine(agentTokenEntries) {
+  const lines = (agentTokenEntries || [])
+    .map((item) => String(item?.token || "").trim())
+    .filter(Boolean)
+    .slice(0, 18);
+  return lines.length > 0 ? lines.join(", ") : "(none yet)";
+}
+
+function buildContextBlock({ topic, transcript, memory, moderatorDirective, charter, brief, speakerId }) {
   const recentTurns = transcript.slice(-10);
   const tokenLine = (memory.tokens || []).map((item) => item.token).join(", ");
+  const agentTokens = memory.agentTokens || {};
+  const speakerTokenLine = formatAgentTokenLine(agentTokens[speakerId] || []);
+  const otherSpeakerId = speakerId === "agent-a" ? "agent-b" : speakerId === "agent-b" ? "agent-a" : "";
+  const counterpartTokenLine = formatAgentTokenLine(otherSpeakerId ? agentTokens[otherSpeakerId] || [] : []);
   const summaries = memory.summaries || [];
   const tiers = memory.tierSummaries || {
     micro: summaries,
@@ -833,6 +907,8 @@ function buildContextBlock({ topic, transcript, memory, moderatorDirective, char
     "Discussion charter:",
     charterBlock,
     tokenLine ? `High-value memory tokens: ${tokenLine}` : "High-value memory tokens: (none yet)",
+    speakerId ? `Your high-value tokens (${speakerId}): ${speakerTokenLine}` : "",
+    otherSpeakerId ? `Counterpart high-value tokens (${otherSpeakerId}): ${counterpartTokenLine}` : "",
     summaryLines.length > 0
       ? ["Summary memory:", ...summaryLines].join("\n")
       : "Summary memory: (no summary snapshots yet)",
@@ -866,7 +942,9 @@ function buildContextBlock({ topic, transcript, memory, moderatorDirective, char
     "5) Avoid repetitive template openers and formal proposal wording every turn.",
     "6) Suggest a concrete next step only when it naturally moves the thread forward.",
     "7) If the objective is completed, start the reply with DONE: and a concise closing statement."
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 export {

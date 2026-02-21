@@ -63,6 +63,18 @@ db.exec(`
     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
   );
 
+  CREATE TABLE IF NOT EXISTS agent_memory_tokens (
+    conversation_id TEXT NOT NULL,
+    speaker_id TEXT NOT NULL,
+    token TEXT NOT NULL,
+    weight REAL NOT NULL DEFAULT 0,
+    occurrences INTEGER NOT NULL DEFAULT 0,
+    last_turn INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (conversation_id, speaker_id, token),
+    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+  );
+
   CREATE TABLE IF NOT EXISTS conversation_summaries (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     conversation_id TEXT NOT NULL,
@@ -149,6 +161,9 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_memory_tokens_conversation_weight
     ON memory_tokens(conversation_id, weight DESC, last_turn DESC);
+
+  CREATE INDEX IF NOT EXISTS idx_agent_memory_tokens_conversation_weight
+    ON agent_memory_tokens(conversation_id, speaker_id, weight DESC, last_turn DESC);
 
   CREATE INDEX IF NOT EXISTS idx_conversation_summaries_range
     ON conversation_summaries(conversation_id, end_turn DESC);
@@ -371,6 +386,23 @@ const upsertMemoryTokenStmt = db.prepare(`
     updated_at = CURRENT_TIMESTAMP
 `);
 
+const upsertAgentMemoryTokenStmt = db.prepare(`
+  INSERT INTO agent_memory_tokens (
+    conversation_id,
+    speaker_id,
+    token,
+    weight,
+    occurrences,
+    last_turn
+  )
+  VALUES (@conversationId, @speakerId, @token, @weight, @occurrences, @lastTurn)
+  ON CONFLICT(conversation_id, speaker_id, token) DO UPDATE SET
+    weight = agent_memory_tokens.weight + excluded.weight,
+    occurrences = agent_memory_tokens.occurrences + excluded.occurrences,
+    last_turn = MAX(agent_memory_tokens.last_turn, excluded.last_turn),
+    updated_at = CURRENT_TIMESTAMP
+`);
+
 const pruneMemoryTokensStmt = db.prepare(`
   DELETE FROM memory_tokens
   WHERE conversation_id = @conversationId
@@ -383,10 +415,33 @@ const pruneMemoryTokensStmt = db.prepare(`
     )
 `);
 
+const pruneAgentMemoryTokensStmt = db.prepare(`
+  DELETE FROM agent_memory_tokens
+  WHERE conversation_id = @conversationId
+    AND speaker_id = @speakerId
+    AND token IN (
+      SELECT token
+      FROM agent_memory_tokens
+      WHERE conversation_id = @conversationId
+        AND speaker_id = @speakerId
+      ORDER BY weight DESC, last_turn DESC, token ASC
+      LIMIT -1 OFFSET @keepLimit
+    )
+`);
+
 const listMemoryTokensStmt = db.prepare(`
   SELECT token, weight, occurrences, last_turn AS lastTurn
   FROM memory_tokens
   WHERE conversation_id = ?
+  ORDER BY weight DESC, last_turn DESC, token ASC
+  LIMIT ?
+`);
+
+const listAgentMemoryTokensStmt = db.prepare(`
+  SELECT token, weight, occurrences, last_turn AS lastTurn
+  FROM agent_memory_tokens
+  WHERE conversation_id = ?
+    AND speaker_id = ?
   ORDER BY weight DESC, last_turn DESC, token ASC
   LIMIT ?
 `);
@@ -696,6 +751,19 @@ const upsertMemoryTokensTx = db.transaction((conversationId, entries) => {
   }
 });
 
+const upsertAgentMemoryTokensTx = db.transaction((conversationId, speakerId, entries) => {
+  for (const entry of entries) {
+    upsertAgentMemoryTokenStmt.run({
+      conversationId,
+      speakerId,
+      token: entry.token,
+      weight: entry.weight,
+      occurrences: entry.occurrences,
+      lastTurn: entry.lastTurn
+    });
+  }
+});
+
 const upsertSemanticMemoryTx = db.transaction((conversationId, entries) => {
   for (const entry of entries) {
     upsertSemanticMemoryStmt.run({
@@ -882,14 +950,47 @@ function upsertMemoryTokens(conversationId, entries) {
   upsertMemoryTokensTx(conversationId, entries);
 }
 
+function upsertAgentMemoryTokens(conversationId, speakerId, entries) {
+  const safeSpeakerId = String(speakerId || "").trim().slice(0, 40);
+  if (!safeSpeakerId || !entries.length) {
+    return;
+  }
+
+  upsertAgentMemoryTokensTx(conversationId, safeSpeakerId, entries);
+}
+
 function pruneMemoryTokens(conversationId, keepLimit = 180) {
   const safeKeepLimit = Math.max(20, Math.min(500, Number(keepLimit) || 180));
   pruneMemoryTokensStmt.run({ conversationId, keepLimit: safeKeepLimit });
 }
 
+function pruneAgentMemoryTokens(conversationId, speakerId, keepLimit = 120) {
+  const safeSpeakerId = String(speakerId || "").trim().slice(0, 40);
+  if (!safeSpeakerId) {
+    return;
+  }
+
+  const safeKeepLimit = Math.max(20, Math.min(500, Number(keepLimit) || 120));
+  pruneAgentMemoryTokensStmt.run({
+    conversationId,
+    speakerId: safeSpeakerId,
+    keepLimit: safeKeepLimit
+  });
+}
+
 function getTopMemoryTokens(conversationId, limit = 50) {
   const safeLimit = Math.max(1, Math.min(200, Number(limit) || 50));
   return listMemoryTokensStmt.all(conversationId, safeLimit);
+}
+
+function getTopAgentMemoryTokens(conversationId, speakerId, limit = 20) {
+  const safeSpeakerId = String(speakerId || "").trim().slice(0, 40);
+  if (!safeSpeakerId) {
+    return [];
+  }
+
+  const safeLimit = Math.max(1, Math.min(200, Number(limit) || 20));
+  return listAgentMemoryTokensStmt.all(conversationId, safeSpeakerId, safeLimit);
 }
 
 function upsertSemanticItems(conversationId, entries) {
@@ -1077,6 +1178,7 @@ export {
   getConversationBrief,
   getConversationAgents,
   getConflictLedger,
+  getTopAgentMemoryTokens,
   getRecentClaimCitations,
   getRecentRetrievalSources,
   getRecentTierSummaries,
@@ -1094,12 +1196,14 @@ export {
   insertSummary,
   listConversations,
   pruneConflictLedger,
+  pruneAgentMemoryTokens,
   pruneMemoryTokens,
   pruneSemanticItems,
   updateConversationMeta,
   upsertConversationBrief,
   upsertConversationAgents,
   upsertConflictLedger,
+  upsertAgentMemoryTokens,
   upsertMemoryTokens,
   upsertRetrievalSources,
   upsertSemanticItems

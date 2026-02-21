@@ -10,7 +10,7 @@ Modern web app where two AI agents discuss a user topic for user-selected turn c
 - Optional per-agent web research notes (DuckDuckGo + Wikipedia) that can be injected as tool context across modes.
 - Persistent conversation state in SQLite.
 - Advanced conversation engine remains available through API:
-  - high-value token memory
+  - high-value token memory (shared + per-agent)
   - micro/meso/macro summary compaction
   - conflict ledger
   - evaluator loop with automatic self-correction
@@ -45,6 +45,8 @@ npm start
 - `SQLITE_PATH`: optional SQLite file path (default `./data/openllmchat.db`)
 - `MEMORY_TOKEN_KEEP_LIMIT`: max stored weighted tokens per conversation (default `180`)
 - `MEMORY_PROMPT_TOKEN_LIMIT`: max memory tokens injected into prompts (default `50`)
+- `MEMORY_AGENT_TOKEN_KEEP_LIMIT`: max stored weighted high-value tokens per agent per conversation (default `120`)
+- `MEMORY_PROMPT_AGENT_TOKEN_LIMIT`: per-agent token count injected into prompts (default `16`)
 - `MEMORY_SUMMARY_WINDOW_TURNS`: turns per summary chunk (default `40`)
 - `MEMORY_MIN_TURNS_FOR_SUMMARY`: minimum total turns before summary generation starts (default `40`)
 - `MEMORY_SUMMARY_LIMIT`: number of latest summaries injected into prompts (default `6`)
@@ -188,7 +190,7 @@ Returns only the persisted agent configuration for a conversation.
 
 ### `POST /api/conversation/:id/agents`
 
-Updates agent fields (`name`, `style`, `temperature`) for `agent-a` / `agent-b`.
+Updates agent fields (`name`, `persona`, `style`, `tools`, `temperature`) for `agent-a` / `agent-b`.
 Request can be partial and only changes the provided fields.
 
 ### `POST /api/conversation/:id/fork`
@@ -210,6 +212,7 @@ Returns the new `conversationId`, fork title, inherited brief, inherited agents,
 Returns compressed memory details for a conversation:
 
 - weighted high-value tokens
+- per-agent high-value tokens
 - micro summaries
 - meso summaries
 - macro summaries

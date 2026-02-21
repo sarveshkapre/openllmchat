@@ -1170,7 +1170,8 @@ async function generateTurn({ topic, speaker, agents, transcript, memory, modera
     memory,
     moderatorDirective,
     charter: DISCUSSION_CHARTER,
-    brief
+    brief,
+    speakerId: speaker?.id
   });
   const roomContextPrompt = buildRoomContextBlock({
     topic,
