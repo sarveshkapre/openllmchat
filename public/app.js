@@ -104,15 +104,28 @@ function appendMessage(entry, animate = true) {
   speaker.className = speakerClass;
   speaker.textContent = entry.speaker;
 
+  const turnGroup = document.createElement("span");
+  turnGroup.className = "turn-group";
+
   const turn = document.createElement("span");
   turn.className = "turn";
   turn.textContent = `Turn ${entry.turn}`;
+
+  const forkBtn = document.createElement("button");
+  forkBtn.type = "button";
+  forkBtn.className = "fork-turn-btn secondary";
+  forkBtn.textContent = "Fork here";
+  forkBtn.addEventListener("click", async () => {
+    await forkConversation(entry.turn);
+  });
 
   const text = document.createElement("p");
   text.textContent = entry.text;
 
   head.appendChild(speaker);
-  head.appendChild(turn);
+  turnGroup.appendChild(turn);
+  turnGroup.appendChild(forkBtn);
+  head.appendChild(turnGroup);
   item.appendChild(head);
   item.appendChild(text);
 
@@ -125,6 +138,49 @@ function appendMessage(entry, animate = true) {
   transcriptEl.appendChild(item);
   displayedTranscript.push(entry);
   item.scrollIntoView({ behavior: animate ? "smooth" : "auto", block: "nearest" });
+}
+
+async function forkConversation(turn) {
+  if (!activeConversationId) {
+    setStatus("Start a thread before forking.");
+    return;
+  }
+
+  try {
+    setStatus(`Forking thread from turn ${turn}...`);
+    const response = await fetch(`/api/conversation/${encodeURIComponent(activeConversationId)}/fork`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ turn })
+    });
+    const result = await response.json();
+
+    if (!response.ok) {
+      throw new Error(result.error || "Could not fork conversation");
+    }
+
+    topicInput.value = result.topic;
+    setConversationState(result.conversationId, result.topic);
+    setBriefFields(result.brief || null);
+    setMemoryChip(result.memory || null);
+
+    if (!result.transcript.length) {
+      renderEmpty();
+    } else {
+      transcriptEl.innerHTML = "";
+      displayedTranscript = [];
+      for (const entry of result.transcript) {
+        appendMessage(entry, false);
+      }
+    }
+
+    setStatus(`Fork created from turn ${result.forkFromTurn}. Now on new thread.`);
+    await loadHistory();
+  } catch (error) {
+    setStatus(error.message || "Could not fork conversation.");
+  }
 }
 
 function slugify(value) {
@@ -233,9 +289,12 @@ function renderHistory(conversations) {
 
     const meta = document.createElement("span");
     meta.className = "thread-meta";
+    const forkMeta = conversation.parentConversationId
+      ? ` • fork@${conversation.forkFromTurn ?? 0}`
+      : "";
     meta.textContent = `${conversation.totalTurns} turns • ${formatUpdatedAt(conversation.updatedAt)}${
       conversation.hasBrief ? " • brief" : ""
-    }`;
+    }${forkMeta}`;
 
     button.appendChild(topic);
     button.appendChild(meta);

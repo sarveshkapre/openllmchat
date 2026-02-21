@@ -21,6 +21,7 @@ Modern web app where two AI agents discuss a user topic in 10-turn batches while
   - Constraints
   - Done criteria
   - Brief is persisted and used by both speaker prompts and moderator checks
+- One-click forking from any turn to branch strategy paths without losing context
 - Conversation history sidebar with one-click thread restore
 - Live turn-by-turn streaming so agent replies appear in real time
 - One-click transcript export (copy markdown or download file)
@@ -87,7 +88,7 @@ Same behavior as `POST /api/conversation`, but returns newline-delimited JSON ch
 
 ### `GET /api/conversation/:id`
 
-Returns a saved conversation transcript, topic, brief, and memory stats.
+Returns a saved conversation transcript, topic, brief, parent/fork metadata, and memory stats.
 
 ### `GET /api/conversation/:id/brief`
 
@@ -96,6 +97,20 @@ Returns only the persisted brief for a conversation.
 ### `POST /api/conversation/:id/brief`
 
 Updates brief fields for an existing conversation.
+
+### `POST /api/conversation/:id/fork`
+
+Creates a new conversation from an existing thread up to a selected turn.
+
+Request body (optional):
+
+```json
+{
+  "turn": 24
+}
+```
+
+Returns the new `conversationId`, inherited brief, copied transcript, and memory stats.
 
 ### `GET /api/conversation/:id/memory`
 
@@ -108,4 +123,4 @@ Returns compressed memory details for a conversation:
 
 ### `GET /api/conversations?limit=30`
 
-Returns recent conversation threads with topic, updated time, turn count, and `hasBrief` flag for history UIs.
+Returns recent conversation threads with topic, updated time, turn count, `hasBrief`, and fork metadata.

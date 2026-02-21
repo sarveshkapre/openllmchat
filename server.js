@@ -10,6 +10,7 @@ import {
   getConversation,
   getConversationBrief,
   getMessages,
+  getMessagesUpToTurn,
   insertMessages,
   listConversations,
   upsertConversationBrief
@@ -557,11 +558,78 @@ app.get("/api/conversation/:id", (req, res) => {
   return res.json({
     conversationId,
     topic: conversation.topic,
+    parentConversationId: conversation.parentConversationId || null,
+    forkFromTurn: Number.isFinite(conversation.forkFromTurn) ? conversation.forkFromTurn : null,
     brief,
     totalTurns: transcript.length,
     transcript,
     memory: memory.stats
   });
+});
+
+app.post("/api/conversation/:id/fork", async (req, res) => {
+  try {
+    const sourceConversationId = String(req.params.id || "").trim();
+    if (!sourceConversationId) {
+      return res.status(400).json({ error: "Conversation id is required." });
+    }
+
+    const sourceConversation = getConversation(sourceConversationId);
+    if (!sourceConversation) {
+      return res.status(404).json({ error: "Conversation not found." });
+    }
+
+    const allSourceMessages = getMessages(sourceConversationId);
+    const maxTurn = allSourceMessages.length;
+    const requestedTurn = Number(req.body?.turn);
+    const forkFromTurn = Number.isFinite(requestedTurn)
+      ? Math.max(0, Math.min(maxTurn, Math.trunc(requestedTurn)))
+      : maxTurn;
+
+    const forkConversationId = randomUUID();
+    createConversation(forkConversationId, sourceConversation.topic, {
+      parentConversationId: sourceConversationId,
+      forkFromTurn
+    });
+
+    const sourceBrief = getConversationBrief(sourceConversationId);
+    upsertConversationBrief(forkConversationId, sourceBrief);
+
+    const forkTranscript =
+      forkFromTurn > 0
+        ? getMessagesUpToTurn(sourceConversationId, forkFromTurn).map((entry) => ({
+            turn: entry.turn,
+            speaker: entry.speaker,
+            speakerId: entry.speakerId,
+            text: entry.text
+          }))
+        : [];
+
+    insertMessages(forkConversationId, forkTranscript);
+
+    await bootstrapMemoryIfNeeded({
+      conversationId: forkConversationId,
+      topic: sourceConversation.topic,
+      transcript: forkTranscript,
+      client,
+      model
+    });
+    const memory = getCompressedMemory(forkConversationId);
+
+    return res.json({
+      conversationId: forkConversationId,
+      topic: sourceConversation.topic,
+      brief: sourceBrief,
+      parentConversationId: sourceConversationId,
+      forkFromTurn,
+      totalTurns: forkTranscript.length,
+      transcript: forkTranscript,
+      memory: memory.stats
+    });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ error: "Failed to fork conversation." });
+  }
 });
 
 app.get("/api/conversation/:id/brief", (req, res) => {

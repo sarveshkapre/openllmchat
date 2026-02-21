@@ -345,6 +345,12 @@ h2 {
   font-size: 0.74rem;
 }
 
+.turn-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
 .speaker-atlas {
   color: var(--atlas);
 }
@@ -355,6 +361,13 @@ h2 {
 
 .turn {
   color: #83a3b6;
+}
+
+.fork-turn-btn {
+  padding: 0.2rem 0.42rem;
+  border-radius: 8px;
+  font-size: 0.63rem;
+  line-height: 1.1;
 }
 
 .message p {

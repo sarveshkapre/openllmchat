@@ -87,15 +87,36 @@ db.exec(`
     ON semantic_memory(conversation_id, item_type, weight DESC, last_turn DESC);
 `);
 
+function ensureColumnExists(tableName, columnName, typeSql) {
+  const columns = db.prepare(`PRAGMA table_info(${tableName})`).all();
+  const hasColumn = columns.some((column) => column.name === columnName);
+  if (!hasColumn) {
+    db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${typeSql}`);
+  }
+}
+
+ensureColumnExists("conversations", "parent_conversation_id", "TEXT");
+ensureColumnExists("conversations", "fork_from_turn", "INTEGER");
+db.exec(`
+  CREATE INDEX IF NOT EXISTS idx_conversations_parent
+    ON conversations(parent_conversation_id, fork_from_turn);
+`);
+
 const getConversationStmt = db.prepare(`
-  SELECT id, topic, created_at AS createdAt, updated_at AS updatedAt
+  SELECT
+    id,
+    topic,
+    parent_conversation_id AS parentConversationId,
+    fork_from_turn AS forkFromTurn,
+    created_at AS createdAt,
+    updated_at AS updatedAt
   FROM conversations
   WHERE id = ?
 `);
 
 const createConversationStmt = db.prepare(`
-  INSERT INTO conversations (id, topic)
-  VALUES (@id, @topic)
+  INSERT INTO conversations (id, topic, parent_conversation_id, fork_from_turn)
+  VALUES (@id, @topic, @parentConversationId, @forkFromTurn)
 `);
 
 const touchConversationStmt = db.prepare(`
@@ -108,6 +129,14 @@ const listMessagesStmt = db.prepare(`
   SELECT turn, speaker, speaker_id AS speakerId, text, created_at AS createdAt
   FROM messages
   WHERE conversation_id = ?
+  ORDER BY turn ASC
+`);
+
+const listMessagesUpToTurnStmt = db.prepare(`
+  SELECT turn, speaker, speaker_id AS speakerId, text, created_at AS createdAt
+  FROM messages
+  WHERE conversation_id = @conversationId
+    AND turn <= @maxTurn
   ORDER BY turn ASC
 `);
 
@@ -128,6 +157,8 @@ const listConversationsStmt = db.prepare(`
   SELECT
     c.id,
     c.topic,
+    c.parent_conversation_id AS parentConversationId,
+    c.fork_from_turn AS forkFromTurn,
     c.created_at AS createdAt,
     c.updated_at AS updatedAt,
     COALESCE(MAX(m.turn), 0) AS totalTurns,
@@ -358,13 +389,22 @@ function getConversation(conversationId) {
   return getConversationStmt.get(conversationId) || null;
 }
 
-function createConversation(conversationId, topic) {
-  createConversationStmt.run({ id: conversationId, topic });
+function createConversation(conversationId, topic, options = {}) {
+  createConversationStmt.run({
+    id: conversationId,
+    topic,
+    parentConversationId: options.parentConversationId || null,
+    forkFromTurn: Number.isFinite(options.forkFromTurn) ? options.forkFromTurn : null
+  });
   return getConversation(conversationId);
 }
 
 function getMessages(conversationId) {
   return listMessagesStmt.all(conversationId);
+}
+
+function getMessagesUpToTurn(conversationId, maxTurn) {
+  return listMessagesUpToTurnStmt.all({ conversationId, maxTurn });
 }
 
 function getMessagesInRange(conversationId, startTurn, endTurn) {
@@ -479,6 +519,7 @@ export {
   getLastSummaryTurn,
   getMemoryStats,
   getMessages,
+  getMessagesUpToTurn,
   getMessagesInRange,
   getRecentSummaries,
   getTopMemoryTokens,
