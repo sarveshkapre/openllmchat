@@ -9,6 +9,7 @@ Modern web app where two AI agents discuss a user topic in 10-turn batches while
 - Persistent conversation state using SQLite
 - Topic continuity by reusing saved transcript as context on each new batch
 - Conversation history sidebar with one-click thread restore
+- Live turn-by-turn streaming so agent replies appear in real time
 - Sleek responsive UI with animated transcript rendering
 - Works with OpenAI API or local fallback mode when no API key is set
 
@@ -47,6 +48,14 @@ Request body:
 ```
 
 Response includes the new turns generated for this run and total turns in the thread.
+
+### `POST /api/conversation/stream`
+
+Same behavior as `POST /api/conversation`, but returns newline-delimited JSON chunks for live UI updates:
+
+- `meta`: conversation info and engine
+- `turn`: one generated turn
+- `done`: final summary
 
 ### `GET /api/conversation/:id`
 

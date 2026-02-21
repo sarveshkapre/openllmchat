@@ -259,7 +259,7 @@ form.addEventListener("submit", async (event) => {
   );
 
   try {
-    const response = await fetch("/api/conversation", {
+    const response = await fetch("/api/conversation/stream", {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
@@ -271,21 +271,74 @@ form.addEventListener("submit", async (event) => {
       })
     });
 
-    const result = await response.json();
-
     if (!response.ok) {
-      throw new Error(result.error || "Request failed");
+      const errorResult = await response.json().catch(() => null);
+      throw new Error(errorResult?.error || "Request failed");
     }
 
-    setConversationState(result.conversationId, result.topic);
-    engineChipEl.textContent = `Engine: ${result.engine}`;
-
-    for (const entry of result.transcript) {
-      appendMessage(entry);
-      await new Promise((resolve) => setTimeout(resolve, 180));
+    if (!response.body) {
+      throw new Error("Streaming is not supported in this browser.");
     }
 
-    setStatus(`Added ${result.turns} turns. Total turns: ${result.totalTurns}. Topic: ${result.topic}`);
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let generatedTurns = 0;
+    let totalTurns = 0;
+    let finalTopic = topic;
+
+    const handleChunk = (chunk) => {
+      if (chunk.type === "meta") {
+        setConversationState(chunk.conversationId, chunk.topic);
+        engineChipEl.textContent = `Engine: ${chunk.engine}`;
+        finalTopic = chunk.topic || finalTopic;
+        return;
+      }
+
+      if (chunk.type === "turn") {
+        if (chunk.entry) {
+          appendMessage(chunk.entry);
+          generatedTurns += 1;
+        }
+        totalTurns = chunk.totalTurns ?? totalTurns;
+        return;
+      }
+
+      if (chunk.type === "done") {
+        totalTurns = chunk.totalTurns ?? totalTurns;
+        finalTopic = chunk.topic || finalTopic;
+        return;
+      }
+
+      if (chunk.type === "error") {
+        throw new Error(chunk.error || "Generation failed");
+      }
+    };
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) {
+        break;
+      }
+
+      buffer += decoder.decode(value, { stream: true });
+      let newlineIndex = buffer.indexOf("\n");
+      while (newlineIndex !== -1) {
+        const line = buffer.slice(0, newlineIndex).trim();
+        buffer = buffer.slice(newlineIndex + 1);
+        if (line) {
+          handleChunk(JSON.parse(line));
+        }
+        newlineIndex = buffer.indexOf("\n");
+      }
+    }
+
+    const tail = buffer.trim();
+    if (tail) {
+      handleChunk(JSON.parse(tail));
+    }
+
+    setStatus(`Added ${generatedTurns} turns. Total turns: ${totalTurns}. Topic: ${finalTopic}`);
     await loadHistory();
   } catch (error) {
     if (String(error.message || "").toLowerCase().includes("not found")) {

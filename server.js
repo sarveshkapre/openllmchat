@@ -112,6 +112,50 @@ async function generateTurn(topic, speaker, transcript) {
   );
 }
 
+function parseTurns(rawTurns) {
+  const requestedTurns = Number(rawTurns ?? 10);
+  return Math.min(10, Math.max(2, Number.isFinite(requestedTurns) ? requestedTurns : 10));
+}
+
+function resolveConversation(body) {
+  const turns = parseTurns(body?.turns);
+  const requestedTopic = String(body?.topic || "").trim();
+  const requestedConversationId = String(body?.conversationId || "").trim();
+
+  let conversation = null;
+  if (requestedConversationId) {
+    conversation = getConversation(requestedConversationId);
+    if (!conversation) {
+      return {
+        error: "Conversation not found. Clear and start a new one.",
+        status: 404
+      };
+    }
+  }
+
+  const topic = conversation?.topic || requestedTopic;
+  if (!topic) {
+    return {
+      error: "Topic is required.",
+      status: 400
+    };
+  }
+
+  const conversationId = conversation?.id || randomUUID();
+  if (!conversation) {
+    createConversation(conversationId, topic);
+  }
+
+  const transcript = getMessages(conversationId);
+
+  return {
+    conversationId,
+    topic,
+    transcript,
+    turns
+  };
+}
+
 app.get("/api/conversation/:id", (req, res) => {
   const conversationId = String(req.params.id || "").trim();
   if (!conversationId) {
@@ -140,32 +184,79 @@ app.get("/api/conversations", (req, res) => {
   return res.json({ conversations });
 });
 
+app.post("/api/conversation/stream", async (req, res) => {
+  try {
+    const setup = resolveConversation(req.body);
+    if (setup.error) {
+      return res.status(setup.status).json({ error: setup.error });
+    }
+
+    const { conversationId, topic, transcript, turns } = setup;
+    const newEntries = [];
+
+    res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    if (typeof res.flushHeaders === "function") {
+      res.flushHeaders();
+    }
+
+    const writeChunk = (payload) => {
+      res.write(`${JSON.stringify(payload)}\n`);
+    };
+
+    writeChunk({
+      type: "meta",
+      conversationId,
+      topic,
+      engine: hasOpenAI ? `OpenAI (${model})` : "Local fallback generator"
+    });
+
+    for (let i = 0; i < turns; i += 1) {
+      const nextTurn = transcript.length + 1;
+      const speaker = AGENTS[(nextTurn - 1) % AGENTS.length];
+      const text = await generateTurn(topic, speaker, transcript);
+
+      const entry = {
+        turn: nextTurn,
+        speaker: speaker.name,
+        speakerId: speaker.id,
+        text
+      };
+
+      transcript.push(entry);
+      newEntries.push(entry);
+      writeChunk({ type: "turn", entry, totalTurns: transcript.length });
+    }
+
+    insertMessages(conversationId, newEntries);
+    writeChunk({
+      type: "done",
+      conversationId,
+      topic,
+      turns: newEntries.length,
+      totalTurns: transcript.length
+    });
+    res.end();
+  } catch (error) {
+    console.error(error);
+    if (res.headersSent) {
+      res.write(`${JSON.stringify({ type: "error", error: "Failed to generate conversation." })}\n`);
+      return res.end();
+    }
+
+    return res.status(500).json({ error: "Failed to generate conversation." });
+  }
+});
+
 app.post("/api/conversation", async (req, res) => {
   try {
-    const requestedTurns = Number(req.body?.turns ?? 10);
-    const turns = Math.min(10, Math.max(2, Number.isFinite(requestedTurns) ? requestedTurns : 10));
-    const requestedTopic = String(req.body?.topic || "").trim();
-    const requestedConversationId = String(req.body?.conversationId || "").trim();
-
-    let conversation = null;
-    if (requestedConversationId) {
-      conversation = getConversation(requestedConversationId);
-      if (!conversation) {
-        return res.status(404).json({ error: "Conversation not found. Clear and start a new one." });
-      }
+    const setup = resolveConversation(req.body);
+    if (setup.error) {
+      return res.status(setup.status).json({ error: setup.error });
     }
 
-    const topic = conversation?.topic || requestedTopic;
-    if (!topic) {
-      return res.status(400).json({ error: "Topic is required." });
-    }
-
-    const conversationId = conversation?.id || randomUUID();
-    if (!conversation) {
-      conversation = createConversation(conversationId, topic);
-    }
-
-    const transcript = getMessages(conversationId);
+    const { conversationId, topic, transcript, turns } = setup;
     const newEntries = [];
 
     for (let i = 0; i < turns; i += 1) {
