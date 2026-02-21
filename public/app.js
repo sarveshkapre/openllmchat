@@ -595,6 +595,15 @@ async function refreshScorecard() {
   }
 }
 
+async function refreshThreadIntelligence(options = {}) {
+  await refreshMemoryInspector();
+  await refreshInsightSnapshot();
+  await refreshScorecard();
+  if (options.withHistory) {
+    await loadHistory();
+  }
+}
+
 function renderLabResults(runs) {
   labResultsState = Array.isArray(runs) ? runs : [];
   labResultsListEl.innerHTML = "";
@@ -986,10 +995,7 @@ async function forkConversation(turn) {
     }
 
     setStatus(`Fork created from turn ${result.forkFromTurn}. Now on new thread.`);
-    await refreshMemoryInspector();
-    await refreshInsightSnapshot();
-    await refreshScorecard();
-    await loadHistory();
+    await refreshThreadIntelligence({ withHistory: true });
   } catch (error) {
     setStatus(error.message || "Could not fork conversation.");
   }
@@ -1085,9 +1091,7 @@ async function loadConversation(conversationId) {
   engineChipEl.textContent = "Engine: restored thread";
   setMemoryChip(result.memory || null);
   setQualityChip(null);
-  await refreshMemoryInspector();
-  await refreshInsightSnapshot();
-  await refreshScorecard();
+  await refreshThreadIntelligence();
 }
 
 function getVisibleConversations(conversations) {
@@ -1781,10 +1785,7 @@ form.addEventListener("submit", async (event) => {
     setStatus(
       `Added ${generatedTurns} turns. Total turns: ${totalTurns}. Topic: ${finalTopic}.${reasonSuffix}${moderatorSuffix}${qualitySuffix}`
     );
-    await refreshMemoryInspector();
-    await refreshInsightSnapshot();
-    await refreshScorecard();
-    await loadHistory();
+    await refreshThreadIntelligence({ withHistory: true });
   } catch (error) {
     if (String(error.message || "").toLowerCase().includes("not found")) {
       clearConversationState();
