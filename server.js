@@ -2,7 +2,7 @@ import dotenv from "dotenv";
 import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import OpenAI from "openai";
 import {
   createConversation,
@@ -113,6 +113,15 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
+function normalizeOrigin(origin) {
+  try {
+    const url = new URL(String(origin || "").trim());
+    return `${url.protocol}//${url.host}`;
+  } catch {
+    return "";
+  }
+}
+
 const MODERATOR_INTERVAL = readIntEnv("MODERATOR_INTERVAL", 6, 2, 20);
 const MAX_GENERATION_MS = readIntEnv("MAX_GENERATION_MS", 30000, 3000, 120000);
 const MAX_REPETITION_STREAK = readIntEnv("MAX_REPETITION_STREAK", 2, 1, 5);
@@ -127,10 +136,20 @@ const GENERATION_LIMIT_MAX_REQUESTS = readIntEnv("GENERATION_LIMIT_MAX_REQUESTS"
 const RATE_LIMIT_MAX_KEYS = readIntEnv("RATE_LIMIT_MAX_KEYS", 12000, 2000, 200000);
 const LAB_DEFAULT_TURNS = readIntEnv("LAB_DEFAULT_TURNS", 6, 2, 10);
 const TRUST_PROXY = readBoolEnv("TRUST_PROXY", false);
+const CSRF_PROTECTION = readBoolEnv("CSRF_PROTECTION", true);
+const APP_ORIGIN = normalizeOrigin(process.env.APP_ORIGIN || "");
+const CSRF_ALLOWED_ORIGINS = new Set(
+  String(process.env.CSRF_ALLOWED_ORIGINS || "")
+    .split(",")
+    .map((item) => normalizeOrigin(item))
+    .filter(Boolean)
+);
+const API_WRITE_TOKEN = String(process.env.API_WRITE_TOKEN || "").trim();
 
 const apiRateState = new Map();
 const generationRateState = new Map();
 let rateSweepTick = 0;
+const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 app.set("trust proxy", TRUST_PROXY);
 
@@ -150,6 +169,30 @@ function getEngineLabel() {
 function getClientKey(req) {
   const ip = req.ip || req.socket?.remoteAddress || "unknown";
   return String(ip);
+}
+
+function isWriteMethod(method) {
+  return WRITE_METHODS.has(String(method || "").toUpperCase());
+}
+
+function extractBearerToken(authHeader) {
+  const raw = String(authHeader || "").trim();
+  const match = raw.match(/^Bearer\s+(.+)$/i);
+  return match ? String(match[1] || "").trim() : "";
+}
+
+function constantTimeMatch(input, expected) {
+  if (!input || !expected) {
+    return false;
+  }
+
+  const left = Buffer.from(String(input));
+  const right = Buffer.from(String(expected));
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  return timingSafeEqual(left, right);
 }
 
 function sweepRateLimitState(stateMap, now, maxKeys) {
@@ -217,6 +260,45 @@ app.use("/api", (req, res, next) => {
   res.setHeader("Cache-Control", "no-store, max-age=0");
   res.setHeader("Pragma", "no-cache");
   next();
+});
+
+app.use("/api", (req, res, next) => {
+  if (!CSRF_PROTECTION || !isWriteMethod(req.method)) {
+    return next();
+  }
+
+  const origin = String(req.headers.origin || "").trim();
+  if (!origin) {
+    return next();
+  }
+
+  const normalizedOrigin = normalizeOrigin(origin);
+  if (!normalizedOrigin) {
+    return res.status(403).json({ error: "Blocked request origin." });
+  }
+
+  const requestOrigin = APP_ORIGIN || normalizeOrigin(`${req.protocol}://${req.get("host") || ""}`);
+  if (requestOrigin && (normalizedOrigin === requestOrigin || CSRF_ALLOWED_ORIGINS.has(normalizedOrigin))) {
+    return next();
+  }
+
+  return res.status(403).json({ error: "Cross-origin write request denied." });
+});
+
+app.use("/api", (req, res, next) => {
+  if (!API_WRITE_TOKEN || !isWriteMethod(req.method)) {
+    return next();
+  }
+
+  const bearerToken = extractBearerToken(req.headers.authorization);
+  const headerToken = String(req.headers["x-api-key"] || "").trim();
+  const providedToken = bearerToken || headerToken;
+  if (constantTimeMatch(providedToken, API_WRITE_TOKEN)) {
+    return next();
+  }
+
+  res.setHeader("WWW-Authenticate", 'Bearer realm="openllmchat-write-api"');
+  return res.status(401).json({ error: "Unauthorized write request." });
 });
 
 app.use("/api", (req, res, next) => {

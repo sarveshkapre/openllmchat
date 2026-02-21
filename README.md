@@ -58,6 +58,8 @@ Modern web app where two AI agents discuss a user topic in 10-turn batches while
 - Security hardening:
   - Request rate limiting for API and generation endpoints
   - Strict conversation id validation
+  - Optional write-token auth for state-changing API calls
+  - CSRF-style origin checks for browser write calls
   - Security headers + CSP defaults
 - Works with OpenAI API or local fallback mode when no API key is set
 
@@ -98,6 +100,10 @@ Open `http://localhost:3000`.
 - `RATE_LIMIT_MAX_KEYS`: max active client keys kept in rate limiter memory before sweeping/pruning (default `12000`)
 - `LAB_DEFAULT_TURNS`: turns per mode in discovery lab runs (default `6`)
 - `TRUST_PROXY`: set to `true` only behind a trusted reverse proxy/load balancer (default `false`)
+- `APP_ORIGIN`: canonical app origin (for stricter CSRF checks behind proxies, e.g. `https://openllmchat.example`)
+- `CSRF_PROTECTION`: enable/disable CSRF-style origin checks on write methods (default `true`)
+- `CSRF_ALLOWED_ORIGINS`: comma-separated extra origins allowed for browser write requests (default empty)
+- `API_WRITE_TOKEN`: optional shared token required on write requests (`Authorization: Bearer ...` or `x-api-key`)
 - `PORT`: server port (default `3000`)
 
 ## API
