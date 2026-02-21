@@ -14,6 +14,8 @@ const historySearchInput = document.querySelector("#history-search");
 const refreshMemoryBtn = document.querySelector("#refresh-memory-btn");
 const refreshInsightsBtn = document.querySelector("#refresh-insights-btn");
 const copyInsightsBtn = document.querySelector("#copy-insights-btn");
+const openBestLabBtn = document.querySelector("#open-best-lab-btn");
+const copyLabReportBtn = document.querySelector("#copy-lab-report-btn");
 const objectiveInput = document.querySelector("#objective");
 const constraintsInput = document.querySelector("#constraints");
 const doneCriteriaInput = document.querySelector("#done-criteria");
@@ -230,6 +232,15 @@ function setInsightStatus(text) {
 
 function setLabStatus(text) {
   labStatusEl.textContent = text;
+}
+
+function bestLabRun() {
+  if (!labResultsState.length) {
+    return null;
+  }
+  return labResultsState
+    .slice()
+    .sort((a, b) => Number(b?.quality?.avgScore || 0) - Number(a?.quality?.avgScore || 0))[0];
 }
 
 function createListEmpty(label) {
@@ -572,9 +583,7 @@ async function runDiscoveryLab() {
 
     renderLabResults(result.runs || []);
     const runs = result.runs || [];
-    const best = runs
-      .slice()
-      .sort((a, b) => Number(b?.quality?.avgScore || 0) - Number(a?.quality?.avgScore || 0))[0];
+    const best = bestLabRun();
     if (best) {
       setLabStatus(`Completed ${runs.length} runs. Best quality mode: ${best.mode}.`);
       setStatus(`Discovery Lab complete. Best mode this run: ${best.mode}.`);
@@ -590,6 +599,46 @@ async function runDiscoveryLab() {
     labBtn.disabled = false;
     startBtn.disabled = false;
   }
+}
+
+function toLabReportMarkdown() {
+  if (!labResultsState.length) {
+    return "";
+  }
+
+  const topic = activeTopic || topicInput.value.trim() || "Untitled topic";
+  const lines = [
+    `# Discovery Lab Report`,
+    ``,
+    `- Topic: ${topic}`,
+    `- Base conversation: ${activeConversationId || "n/a"}`,
+    `- Runs: ${labResultsState.length}`,
+    ``,
+    `## Results`
+  ];
+
+  for (const run of labResultsState) {
+    const score = Number(run?.quality?.avgScore || 0);
+    const decisions = Number(run?.insights?.stats?.decisionCount || 0);
+    const openQuestions = Number(run?.insights?.stats?.openQuestionCount || 0);
+    const nextStep = run?.insights?.nextSteps?.[0] || "No next step.";
+    lines.push(`### ${run.mode}`);
+    lines.push(`- Thread: ${run.conversationId}`);
+    lines.push(`- Quality: ${(score * 100).toFixed(0)}`);
+    lines.push(`- Decisions: ${decisions}`);
+    lines.push(`- Open questions: ${openQuestions}`);
+    lines.push(`- Next step: ${nextStep}`);
+    lines.push("");
+  }
+
+  const best = bestLabRun();
+  if (best) {
+    lines.push(`## Recommendation`);
+    lines.push(`Use mode **${best.mode}** for the next deepening pass on this topic.`);
+    lines.push(`Open: ${best.conversationId}`);
+  }
+
+  return lines.join("\n");
 }
 
 function setMemoryChip(memory) {
@@ -1163,6 +1212,37 @@ refreshInsightsBtn.addEventListener("click", async () => {
 
 labBtn.addEventListener("click", async () => {
   await runDiscoveryLab();
+});
+
+openBestLabBtn.addEventListener("click", async () => {
+  const best = bestLabRun();
+  if (!best) {
+    setStatus("No lab results yet.");
+    return;
+  }
+
+  try {
+    setStatus(`Opening best lab run: ${best.mode}...`);
+    await loadConversation(best.conversationId);
+    await loadHistory();
+  } catch (error) {
+    setStatus(error.message || "Could not open best lab run.");
+  }
+});
+
+copyLabReportBtn.addEventListener("click", async () => {
+  const markdown = toLabReportMarkdown();
+  if (!markdown) {
+    setStatus("No lab report to copy yet.");
+    return;
+  }
+
+  try {
+    await navigator.clipboard.writeText(markdown);
+    setStatus("Lab report copied.");
+  } catch (error) {
+    setStatus("Clipboard blocked. Could not copy lab report.");
+  }
 });
 
 copyInsightsBtn.addEventListener("click", async () => {
