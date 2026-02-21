@@ -59,7 +59,8 @@ body {
 
 .app-header,
 .control-panel,
-.conversation-panel {
+.conversation-panel,
+.history-panel {
   background: var(--panel);
   border: 1px solid var(--panel-border);
   border-radius: 18px;
@@ -179,6 +180,73 @@ button:disabled {
   font-size: 0.73rem;
 }
 
+.workspace {
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+  gap: 1rem;
+}
+
+.history-panel {
+  padding: 0.8rem;
+  min-height: 380px;
+  animation: reveal-up 680ms ease both;
+}
+
+.history-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.45rem;
+}
+
+.history-status {
+  color: var(--muted);
+  font-size: 0.85rem;
+  min-height: 1.2rem;
+  margin-bottom: 0.45rem;
+}
+
+.history-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.thread-item {
+  border: 1px solid rgba(134, 193, 216, 0.2);
+  border-radius: 12px;
+  width: 100%;
+  text-align: left;
+  padding: 0.6rem 0.62rem;
+  color: #d9ecf8;
+  background: rgba(8, 21, 31, 0.9);
+  display: grid;
+  gap: 0.24rem;
+}
+
+.thread-item:hover {
+  box-shadow: 0 10px 22px rgba(54, 130, 172, 0.16);
+}
+
+.thread-item.active {
+  border-color: rgba(123, 245, 210, 0.75);
+  background: rgba(9, 30, 37, 0.95);
+}
+
+.thread-topic {
+  font-size: 0.85rem;
+  line-height: 1.35;
+}
+
+.thread-meta {
+  font-family: "IBM Plex Mono", monospace;
+  color: #98b6c8;
+  font-size: 0.68rem;
+}
+
 .conversation-panel {
   min-height: 380px;
   padding: 1rem 1.1rem;
@@ -278,6 +346,14 @@ h2 {
   .app-shell {
     width: min(960px, calc(100% - 1rem));
     margin: 1rem auto;
+  }
+
+  .workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .history-panel {
+    min-height: auto;
   }
 
   .input-row {

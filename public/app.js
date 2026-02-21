@@ -2,9 +2,12 @@ const form = document.querySelector("#conversation-form");
 const topicInput = document.querySelector("#topic");
 const startBtn = document.querySelector("#start-btn");
 const clearBtn = document.querySelector("#clear-btn");
+const refreshHistoryBtn = document.querySelector("#refresh-history-btn");
 const transcriptEl = document.querySelector("#transcript");
 const statusEl = document.querySelector("#status");
 const engineChipEl = document.querySelector("#engine-chip");
+const historyListEl = document.querySelector("#history-list");
+const historyStatusEl = document.querySelector("#history-status");
 
 const CONVERSATION_ID_KEY = "openllmchat:conversationId";
 const TOPIC_KEY = "openllmchat:topic";
@@ -14,6 +17,10 @@ let activeTopic = localStorage.getItem(TOPIC_KEY) || "";
 
 function setStatus(text) {
   statusEl.textContent = text;
+}
+
+function setHistoryStatus(text) {
+  historyStatusEl.textContent = text;
 }
 
 function setConversationState(conversationId, topic) {
@@ -82,6 +89,117 @@ function appendMessage(entry, animate = true) {
   item.scrollIntoView({ behavior: animate ? "smooth" : "auto", block: "nearest" });
 }
 
+function formatUpdatedAt(iso) {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) {
+    return "unknown";
+  }
+
+  return date.toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+
+async function loadConversation(conversationId) {
+  const response = await fetch(`/api/conversation/${encodeURIComponent(conversationId)}`);
+  const result = await response.json();
+
+  if (!response.ok) {
+    throw new Error(result.error || "Could not load conversation");
+  }
+
+  topicInput.value = result.topic;
+  setConversationState(result.conversationId, result.topic);
+
+  if (!result.transcript.length) {
+    renderEmpty();
+  } else {
+    transcriptEl.innerHTML = "";
+    for (const entry of result.transcript) {
+      appendMessage(entry, false);
+    }
+  }
+
+  setStatus(`Restored ${result.totalTurns} turns on topic: ${result.topic}`);
+  engineChipEl.textContent = "Engine: restored thread";
+}
+
+function renderHistory(conversations) {
+  historyListEl.innerHTML = "";
+
+  if (!conversations.length) {
+    const empty = document.createElement("li");
+    empty.className = "empty";
+    empty.textContent = "No saved threads yet.";
+    historyListEl.appendChild(empty);
+    setHistoryStatus("0 saved threads");
+    return;
+  }
+
+  for (const conversation of conversations) {
+    const li = document.createElement("li");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "thread-item";
+
+    if (conversation.id === activeConversationId) {
+      button.classList.add("active");
+    }
+
+    const topic = document.createElement("span");
+    topic.className = "thread-topic";
+    topic.textContent = conversation.topic;
+
+    const meta = document.createElement("span");
+    meta.className = "thread-meta";
+    meta.textContent = `${conversation.totalTurns} turns • ${formatUpdatedAt(conversation.updatedAt)}`;
+
+    button.appendChild(topic);
+    button.appendChild(meta);
+    button.addEventListener("click", async () => {
+      if (conversation.id === activeConversationId) {
+        return;
+      }
+
+      try {
+        setStatus("Loading selected thread...");
+        await loadConversation(conversation.id);
+        await loadHistory();
+      } catch (error) {
+        setStatus(error.message || "Could not switch thread.");
+      }
+    });
+
+    li.appendChild(button);
+    historyListEl.appendChild(li);
+  }
+
+  setHistoryStatus(`${conversations.length} saved threads`);
+}
+
+async function loadHistory() {
+  try {
+    const response = await fetch("/api/conversations?limit=30");
+    const result = await response.json();
+
+    if (!response.ok) {
+      throw new Error(result.error || "Could not load history");
+    }
+
+    renderHistory(result.conversations || []);
+  } catch (error) {
+    historyListEl.innerHTML = "";
+    const empty = document.createElement("li");
+    empty.className = "empty";
+    empty.textContent = "History unavailable.";
+    historyListEl.appendChild(empty);
+    setHistoryStatus("History unavailable");
+  }
+}
+
 async function restoreConversation() {
   if (!activeConversationId) {
     clearTranscript("Enter a topic to begin.");
@@ -91,27 +209,7 @@ async function restoreConversation() {
   setStatus("Loading previous conversation...");
 
   try {
-    const response = await fetch(`/api/conversation/${encodeURIComponent(activeConversationId)}`);
-    const result = await response.json();
-
-    if (!response.ok) {
-      throw new Error(result.error || "Could not restore conversation");
-    }
-
-    topicInput.value = result.topic;
-    setConversationState(result.conversationId, result.topic);
-
-    if (!result.transcript.length) {
-      renderEmpty();
-    } else {
-      transcriptEl.innerHTML = "";
-      for (const entry of result.transcript) {
-        appendMessage(entry, false);
-      }
-    }
-
-    setStatus(`Restored ${result.totalTurns} turns on topic: ${result.topic}`);
-    engineChipEl.textContent = "Engine: restored thread";
+    await loadConversation(activeConversationId);
   } catch (error) {
     clearConversationState();
     clearTranscript("Saved conversation was not found. Start a new topic.");
@@ -119,11 +217,17 @@ async function restoreConversation() {
   }
 }
 
-clearBtn.addEventListener("click", () => {
+refreshHistoryBtn.addEventListener("click", async () => {
+  setHistoryStatus("Refreshing...");
+  await loadHistory();
+});
+
+clearBtn.addEventListener("click", async () => {
   clearConversationState();
   topicInput.value = "";
-  clearTranscript();
+  clearTranscript("Started a fresh thread.");
   engineChipEl.textContent = "Engine: waiting";
+  await loadHistory();
 });
 
 form.addEventListener("submit", async (event) => {
@@ -182,9 +286,11 @@ form.addEventListener("submit", async (event) => {
     }
 
     setStatus(`Added ${result.turns} turns. Total turns: ${result.totalTurns}. Topic: ${result.topic}`);
+    await loadHistory();
   } catch (error) {
     if (String(error.message || "").toLowerCase().includes("not found")) {
       clearConversationState();
+      await loadHistory();
     }
 
     if (!transcriptEl.children.length) {
@@ -196,4 +302,7 @@ form.addEventListener("submit", async (event) => {
   }
 });
 
-restoreConversation();
+(async () => {
+  await loadHistory();
+  await restoreConversation();
+})();

@@ -9,7 +9,8 @@ import {
   dbPath,
   getConversation,
   getMessages,
-  insertMessages
+  insertMessages,
+  listConversations
 } from "./db.js";
 
 dotenv.config();
@@ -130,6 +131,13 @@ app.get("/api/conversation/:id", (req, res) => {
     totalTurns: transcript.length,
     transcript
   });
+});
+
+app.get("/api/conversations", (req, res) => {
+  const requestedLimit = Number(req.query.limit ?? 20);
+  const limit = Math.min(100, Math.max(1, Number.isFinite(requestedLimit) ? requestedLimit : 20));
+  const conversations = listConversations(limit);
+  return res.json({ conversations });
 });
 
 app.post("/api/conversation", async (req, res) => {

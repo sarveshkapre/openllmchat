@@ -59,6 +59,20 @@ const insertMessageStmt = db.prepare(`
   VALUES (@conversationId, @turn, @speaker, @speakerId, @text)
 `);
 
+const listConversationsStmt = db.prepare(`
+  SELECT
+    c.id,
+    c.topic,
+    c.created_at AS createdAt,
+    c.updated_at AS updatedAt,
+    COALESCE(MAX(m.turn), 0) AS totalTurns
+  FROM conversations c
+  LEFT JOIN messages m ON m.conversation_id = c.id
+  GROUP BY c.id
+  ORDER BY c.updated_at DESC
+  LIMIT ?
+`);
+
 const insertMessagesTx = db.transaction((conversationId, entries) => {
   for (const entry of entries) {
     insertMessageStmt.run({
@@ -94,4 +108,16 @@ function insertMessages(conversationId, entries) {
   insertMessagesTx(conversationId, entries);
 }
 
-export { createConversation, dbPath, getConversation, getMessages, insertMessages };
+function listConversations(limit = 20) {
+  const safeLimit = Math.min(100, Math.max(1, Number(limit) || 20));
+  return listConversationsStmt.all(safeLimit);
+}
+
+export {
+  createConversation,
+  dbPath,
+  getConversation,
+  getMessages,
+  insertMessages,
+  listConversations
+};

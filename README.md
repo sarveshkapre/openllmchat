@@ -8,6 +8,7 @@ Modern web app where two AI agents discuss a user topic in 10-turn batches while
 - Fixed 10-turn generation per run
 - Persistent conversation state using SQLite
 - Topic continuity by reusing saved transcript as context on each new batch
+- Conversation history sidebar with one-click thread restore
 - Sleek responsive UI with animated transcript rendering
 - Works with OpenAI API or local fallback mode when no API key is set
 
@@ -50,3 +51,7 @@ Response includes the new turns generated for this run and total turns in the th
 ### `GET /api/conversation/:id`
 
 Returns a saved conversation transcript and topic for a given `conversationId`.
+
+### `GET /api/conversations?limit=30`
+
+Returns recent conversation threads with topic, updated time, and turn count for history UIs.
