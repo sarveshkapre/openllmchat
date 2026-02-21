@@ -1,10 +1,10 @@
 # openllmchat
 
-Modern web app where two AI agents discuss a user topic in 10-turn batches while preserving context in SQLite.
+Modern web app where two AI agents discuss a user topic for user-selected turn counts while preserving context in SQLite.
 
 ## Features
 
-- Minimal UI with only 3 core actions: run 10-turn conversation, switch light/dark theme, restore thread history.
+- Minimal UI with only 3 core actions: run conversation (topic + turns), switch light/dark theme, and use a collapsible thread history sidebar.
 - Two agent personas that alternate each turn with live streaming output.
 - Persistent conversation state in SQLite.
 - Advanced conversation engine remains available through API:

@@ -20,6 +20,7 @@
           <h1>Two agents, one focused thread.</h1>
         </div>
         <div class="top-actions">
+          <button id="sidebar-toggle" type="button" class="secondary">Hide threads</button>
           <button id="theme-toggle" type="button" class="secondary">Dark theme</button>
           <button id="new-thread-btn" type="button" class="secondary">New thread</button>
         </div>
@@ -27,10 +28,11 @@
 
       <section class="panel composer">
         <form id="conversation-form">
-          <label for="topic">Topic</label>
+          <label for="topic">Topic and turns</label>
           <div class="row">
             <input id="topic" name="topic" type="text" placeholder="Example: How should AI tutors personalize feedback?" required />
-            <button id="start-btn" type="submit">Run 10 turns</button>
+            <input id="turns" name="turns" class="turns-input" type="number" min="2" max="10" step="1" value="10" required />
+            <button id="start-btn" type="submit">Start conversation</button>
           </div>
         </form>
         <p id="status" class="status">Enter a topic and run.</p>
