@@ -809,7 +809,28 @@ function stripDonePrefix(text) {
     .trim();
 }
 
+function turnTakingContextBlock(topic, transcript) {
+  const previous = transcript[transcript.length - 1];
+  if (!previous) {
+    return [
+      "Turn-taking context:",
+      `Original topic/question: ${topic}`,
+      "No prior agent reply exists yet.",
+      "You are the opening speaker: give your first opinion on the topic."
+    ].join("\n");
+  }
+
+  return [
+    "Turn-taking context:",
+    `Original topic/question: ${topic}`,
+    `Previous speaker: ${previous.speaker}`,
+    `Previous reply: ${previous.text}`,
+    "Respond directly to the previous reply first, then add one new relevant point."
+  ].join("\n");
+}
+
 function localTurn(topic, transcript, moderatorDirective, brief, mode = "exploration", references = []) {
+  const previous = transcript[transcript.length - 1];
   const recent = transcript.slice(-2).map((entry) => entry.text).join(" ");
   const guidance = moderatorDirective
     ? `Moderator guidance: ${moderatorDirective}.`
@@ -830,11 +851,15 @@ function localTurn(topic, transcript, moderatorDirective, brief, mode = "explora
   ];
 
   const seed = seeds[transcript.length % seeds.length];
-  const hook = recent
-    ? `I agree with the recent point: \"${recent.slice(0, 100)}...\"`
+  const hook = previous
+    ? `Responding to ${previous.speaker}'s point,`
     : "Opening thought:";
 
-  return `${hook} ${objectiveHint} ${modeHint} ${guidance} ${citationHint} ${seed}`.replace(/\s+/g, " ").trim();
+  return `${hook} ${objectiveHint} ${modeHint} ${guidance} ${citationHint} ${seed} ${
+    previous ? `This directly builds on: "${recent.slice(0, 100)}..."` : ""
+  }`
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 async function generateTurn({ topic, speaker, transcript, memory, moderatorDirective, brief, mode, references }) {
@@ -850,7 +875,8 @@ async function generateTurn({ topic, speaker, transcript, memory, moderatorDirec
     charter: DISCUSSION_CHARTER,
     brief
   });
-  const prompt = [basePrompt, buildReferenceBlock(references)].join("\n");
+  const turnTakingPrompt = turnTakingContextBlock(topic, transcript);
+  const userPrompt = [basePrompt, turnTakingPrompt, buildReferenceBlock(references)].join("\n");
 
   const completion = await client.chat.completions.create({
     model,
@@ -863,6 +889,8 @@ async function generateTurn({ topic, speaker, transcript, memory, moderatorDirec
           speaker.style,
           DISCOVERY_MODE_HINTS[mode] || DISCOVERY_MODE_HINTS.exploration,
           "Maintain continuity and avoid topic drift.",
+          "Turn-taking rule: respond to the previous agent reply before introducing your new point.",
+          "When a previous reply exists, directly address it in your first sentence.",
           "Write only substantive content, no meta-commentary.",
           mode === "debate"
             ? "For factual claims, cite supporting references using [R#] from the provided reference notes."
@@ -871,7 +899,7 @@ async function generateTurn({ topic, speaker, transcript, memory, moderatorDirec
       },
       {
         role: "user",
-        content: prompt
+        content: userPrompt
       }
     ]
   });
