@@ -88,3 +88,53 @@ Design direction: minimal, modern, calm, and precise. The interface should feel 
 - Overly decorative “AI-style” visuals that reduce trust.
 - Hidden affordances for critical actions.
 
+## 13) Snappy Modern Execution Spec (For Future Model Runs)
+
+- Do not use default, untouched shadcn tokens. Always set a deliberate light and dark token palette.
+- Keep one primary accent family and use it consistently for active states, focus, and agent-bubble emphasis.
+- Replace flat panel stacks with layered depth: soft glass surfaces, subtle blur, low-noise shadows, and thin borders.
+- Never put cards inside cards unless there is a clear information hierarchy need.
+
+### Layout Rules
+
+- Use a ChatGPT-like structure: collapsible left sidebar, central conversation thread, sticky composer/footer.
+- Keep the thread as the visual center; side tools are secondary and should not compete for attention.
+- Use sticky header and sticky composer with translucent background so context stays visible while scrolling.
+- Avoid cramped widths: keep thread max width around readable prose measures (roughly 70-90 characters per line).
+
+### Conversation Rendering Rules
+
+- Render messages as left/right conversational bubbles with clear speaker labels.
+- Differentiate speakers with contrast and surface treatment, not loud color overload.
+- Prioritize text readability: 15-17px body size, generous line-height, and soft corner radius.
+- Show stream updates progressively and animate message entry subtly once per message.
+
+### Motion and Responsiveness Rules
+
+- Interaction timing should feel fast: 150-220ms for hover/focus/press transitions.
+- Include tactile feedback for buttons (tiny press scale) and clear focus rings on keyboard navigation.
+- Use one entry animation pattern for messages; avoid layered or competing animations.
+- Respect `prefers-reduced-motion` and disable non-essential animation there.
+
+### Visual Cleanliness Rules
+
+- Reduce border noise. Use borders only where they communicate structure.
+- Prefer shadow + contrast + spacing for hierarchy before adding extra lines/dividers.
+- Keep status/info text subdued; primary content must remain dominant.
+- Keep controls compact and aligned; no oversized control bars for simple actions.
+
+### Minimal Feature Budget Rules
+
+- Keep the main screen limited to core actions:
+- Topic input
+- Turn count
+- Persona A/B selection
+- Start/Stop
+- History actions should stay lightweight and tucked into the sidebar.
+
+### Quality Gate (Must Pass Before Shipping)
+
+- First glance should reveal: where to type, where to start, where conversation appears.
+- No visual element should look decorative without functional purpose.
+- Light and dark themes both maintain contrast and perceived depth.
+- Mobile layout keeps the same action order and does not hide critical controls.
