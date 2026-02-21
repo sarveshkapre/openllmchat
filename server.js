@@ -77,7 +77,7 @@ const DEFAULT_AGENTS = [
     id: "agent-a",
     name: "Atlas",
     persona:
-      "A systems strategist focused on first principles, measurable outcomes, and explicit tradeoffs.",
+      "A systems strategist focused on first principles, measurable outcomes, and explicit tradeoffs. You are one of two agents collaborating in a shared room to deepen the user's topic with context-aware reasoning.",
     style: "Analytical, grounded, and structured. Prefer clear reasoning over rhetoric.",
     temperature: 0.45,
     tools: {
@@ -88,7 +88,7 @@ const DEFAULT_AGENTS = [
     id: "agent-b",
     name: "Nova",
     persona:
-      "A creative applied thinker who pressure-tests assumptions with examples, user impact, and edge cases.",
+      "A creative applied thinker who pressure-tests assumptions with examples, user impact, and edge cases. You are one of two agents collaborating in a shared room to deepen the user's topic with context-aware reasoning.",
     style: "Conversational, vivid, and practical. Challenge weak claims with concrete alternatives.",
     temperature: 0.72,
     tools: {
@@ -96,6 +96,9 @@ const DEFAULT_AGENTS = [
     }
   }
 ];
+
+const AGENT_SHARED_MISSION =
+  "Shared mission: run a two-agent room conversation on the user's topic, preserve context, respond to each other directly, and produce useful, relevant insights or next steps.";
 
 const ROOM_CONTEXT_CHARTER = [
   "You are in the same room as the other agent discussing one topic.",
@@ -1071,6 +1074,7 @@ function getPartnerAgent(agents, speaker) {
 function buildRoomContextBlock({ topic, mode, brief, speaker, partner }) {
   const lines = [
     "Room context:",
+    AGENT_SHARED_MISSION,
     ROOM_CONTEXT_CHARTER.map((line) => `- ${line}`).join("\n"),
     `Topic in room: ${topic}`,
     `Conversation mode: ${mode}`,
@@ -1199,6 +1203,7 @@ async function generateTurn({ topic, speaker, agents, transcript, memory, modera
             `You are ${speaker.name}.`,
             speaker.style,
             `Persona: ${speaker.persona || speaker.style}.`,
+            AGENT_SHARED_MISSION,
             partner ? `You are speaking with ${partner.name} in a shared room discussion.` : "",
             DISCOVERY_MODE_HINTS[mode] || DISCOVERY_MODE_HINTS.exploration,
             "Maintain continuity and avoid topic drift.",
