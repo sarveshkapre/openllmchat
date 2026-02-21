@@ -6,6 +6,11 @@ import { fileURLToPath } from "node:url";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import OpenAI from "openai";
 import {
+  createChatCompletionWithFallback,
+  extractAssistantText,
+  normalizeReasoningEffort
+} from "./openaiCompat.js";
+import {
   clearConversations,
   createConversation,
   dbPath,
@@ -173,7 +178,9 @@ const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 app.set("trust proxy", TRUST_PROXY);
 
-const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
+const model = process.env.OPENAI_MODEL || "gpt-5.2";
+const fallbackModel = process.env.OPENAI_FALLBACK_MODEL || "gpt-4o-mini";
+const reasoningEffort = normalizeReasoningEffort(process.env.OPENAI_REASONING_EFFORT || "medium", "medium");
 const hasOpenAI = Boolean(process.env.OPENAI_API_KEY);
 const client = hasOpenAI
   ? new OpenAI({
@@ -183,7 +190,9 @@ const client = hasOpenAI
   : null;
 
 function getEngineLabel() {
-  return hasOpenAI ? `OpenAI (${model})` : "Local fallback generator";
+  return hasOpenAI
+    ? `OpenAI (${model}, reasoning:${reasoningEffort})`
+    : "Local fallback generator";
 }
 
 function getClientKey(req) {
@@ -880,8 +889,11 @@ async function generateTurn({ topic, speaker, transcript, memory, moderatorDirec
   const turnTakingPrompt = turnTakingContextBlock(topic, transcript);
   const userPrompt = [basePrompt, turnTakingPrompt, buildReferenceBlock(references)].join("\n");
 
-  const completion = await client.chat.completions.create({
+  const result = await createChatCompletionWithFallback({
+    client,
     model,
+    fallbackModel,
+    reasoningEffort,
     temperature: speaker.temperature,
     messages: [
       {
@@ -906,10 +918,7 @@ async function generateTurn({ topic, speaker, transcript, memory, moderatorDirec
     ]
   });
 
-  return (
-    completion.choices?.[0]?.message?.content?.trim() ||
-    localTurn(topic, transcript, moderatorDirective, brief, mode, references)
-  );
+  return extractAssistantText(result.completion) || localTurn(topic, transcript, moderatorDirective, brief, mode, references);
 }
 
 function parseTurns(rawTurns) {
@@ -1502,8 +1511,11 @@ async function runModerator({ topic, transcript, memory, currentDirective, brief
     .map((item) => item.token)
     .join(", ");
 
-  const response = await client.chat.completions.create({
+  const result = await createChatCompletionWithFallback({
+    client,
     model,
+    fallbackModel,
+    reasoningEffort,
     temperature: 0,
     messages: [
       {
@@ -1537,7 +1549,7 @@ async function runModerator({ topic, transcript, memory, currentDirective, brief
     ]
   });
 
-  const raw = response.choices?.[0]?.message?.content?.trim();
+  const raw = extractAssistantText(result.completion);
   const parsed = parseJsonObject(raw);
 
   if (!parsed || typeof parsed !== "object") {

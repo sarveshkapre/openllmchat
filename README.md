@@ -37,7 +37,9 @@ npm start
 ## Environment
 
 - `OPENAI_API_KEY`: required for live model generation
-- `OPENAI_MODEL`: model name (default `gpt-4o-mini`)
+- `OPENAI_MODEL`: model name (default `gpt-5.2`)
+- `OPENAI_REASONING_EFFORT`: reasoning effort (`none|minimal|low|medium|high|xhigh`, default `medium`)
+- `OPENAI_FALLBACK_MODEL`: optional fallback model if primary is unavailable (default `gpt-4o-mini`)
 - `OPENAI_BASE_URL`: optional for OpenAI-compatible providers
 - `SQLITE_PATH`: optional SQLite file path (default `./data/openllmchat.db`)
 - `MEMORY_TOKEN_KEEP_LIMIT`: max stored weighted tokens per conversation (default `180`)

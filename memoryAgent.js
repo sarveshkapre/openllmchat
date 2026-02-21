@@ -16,6 +16,11 @@ import {
   upsertMemoryTokens,
   upsertSemanticItems
 } from "./db.js";
+import {
+  createChatCompletionWithFallback,
+  extractAssistantText,
+  normalizeReasoningEffort
+} from "./openaiCompat.js";
 
 const STOP_WORDS = new Set([
   "a",
@@ -139,6 +144,8 @@ const MEMORY_PROMPT_MESO_LIMIT = readIntEnv("MEMORY_PROMPT_MESO_LIMIT", 4, 1, 12
 const MEMORY_PROMPT_MACRO_LIMIT = readIntEnv("MEMORY_PROMPT_MACRO_LIMIT", 3, 1, 8);
 const MEMORY_CONFLICT_KEEP_LIMIT = readIntEnv("MEMORY_CONFLICT_KEEP_LIMIT", 160, 30, 600);
 const MEMORY_PROMPT_CONFLICT_LIMIT = readIntEnv("MEMORY_PROMPT_CONFLICT_LIMIT", 14, 3, 80);
+const OPENAI_REASONING_EFFORT = normalizeReasoningEffort(process.env.OPENAI_REASONING_EFFORT || "medium", "medium");
+const OPENAI_FALLBACK_MODEL = process.env.OPENAI_FALLBACK_MODEL || "gpt-4o-mini";
 
 const TOKEN_PATTERN = /[a-z0-9][a-z0-9'-]*/gi;
 
@@ -364,8 +371,11 @@ async function summarizeChunk({ topic, messages, client, model }) {
   }
 
   try {
-    const completion = await client.chat.completions.create({
+    const result = await createChatCompletionWithFallback({
+      client,
       model,
+      fallbackModel: OPENAI_FALLBACK_MODEL,
+      reasoningEffort: OPENAI_REASONING_EFFORT,
       temperature: 0.2,
       messages: [
         {
@@ -388,7 +398,7 @@ async function summarizeChunk({ topic, messages, client, model }) {
       ]
     });
 
-    return completion.choices?.[0]?.message?.content?.trim() || localSummary(topic, messages);
+    return extractAssistantText(result.completion) || localSummary(topic, messages);
   } catch {
     return localSummary(topic, messages);
   }
@@ -431,8 +441,11 @@ async function summarizeTierChunk({ topic, tier, summaries, client, model }) {
   }
 
   try {
-    const completion = await client.chat.completions.create({
+    const result = await createChatCompletionWithFallback({
+      client,
       model,
+      fallbackModel: OPENAI_FALLBACK_MODEL,
+      reasoningEffort: OPENAI_REASONING_EFFORT,
       temperature: 0.12,
       messages: [
         {
@@ -456,7 +469,7 @@ async function summarizeTierChunk({ topic, tier, summaries, client, model }) {
       ]
     });
 
-    return completion.choices?.[0]?.message?.content?.trim() || localTierSummary(topic, tier, summaries);
+    return extractAssistantText(result.completion) || localTierSummary(topic, tier, summaries);
   } catch {
     return localTierSummary(topic, tier, summaries);
   }
