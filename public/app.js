@@ -7,6 +7,7 @@ const saveAgentsBtn = document.querySelector("#save-agents-btn");
 const copyBtn = document.querySelector("#copy-btn");
 const downloadBtn = document.querySelector("#download-btn");
 const refreshHistoryBtn = document.querySelector("#refresh-history-btn");
+const refreshMemoryBtn = document.querySelector("#refresh-memory-btn");
 const objectiveInput = document.querySelector("#objective");
 const constraintsInput = document.querySelector("#constraints");
 const doneCriteriaInput = document.querySelector("#done-criteria");
@@ -23,6 +24,10 @@ const memoryChipEl = document.querySelector("#memory-chip");
 const qualityChipEl = document.querySelector("#quality-chip");
 const historyListEl = document.querySelector("#history-list");
 const historyStatusEl = document.querySelector("#history-status");
+const memoryInspectorStatusEl = document.querySelector("#memory-inspector-status");
+const memoryTokenListEl = document.querySelector("#memory-token-list");
+const memorySemanticListEl = document.querySelector("#memory-semantic-list");
+const memorySummaryListEl = document.querySelector("#memory-summary-list");
 
 const CONVERSATION_ID_KEY = "openllmchat:conversationId";
 const TOPIC_KEY = "openllmchat:topic";
@@ -46,6 +51,7 @@ let activeTopic = localStorage.getItem(TOPIC_KEY) || "";
 let displayedTranscript = [];
 let memoryState = null;
 let qualityState = null;
+let memoryInspectorState = null;
 
 function setStatus(text) {
   statusEl.textContent = text;
@@ -53,6 +59,153 @@ function setStatus(text) {
 
 function setHistoryStatus(text) {
   historyStatusEl.textContent = text;
+}
+
+function setMemoryInspectorStatus(text) {
+  memoryInspectorStatusEl.textContent = text;
+}
+
+function createListEmpty(label) {
+  const li = document.createElement("li");
+  li.className = "memory-empty";
+  li.textContent = label;
+  return li;
+}
+
+function clearMemoryInspector(message = "Start or restore a thread to inspect memory state.") {
+  memoryInspectorState = null;
+  memoryTokenListEl.innerHTML = "";
+  memorySemanticListEl.innerHTML = "";
+  memorySummaryListEl.innerHTML = "";
+  memoryTokenListEl.appendChild(createListEmpty("No tokens yet."));
+  memorySemanticListEl.appendChild(createListEmpty("No semantic items yet."));
+  memorySummaryListEl.appendChild(createListEmpty("No summaries yet."));
+  setMemoryInspectorStatus(message);
+}
+
+function renderTokenMemory(tokens) {
+  memoryTokenListEl.innerHTML = "";
+  if (!tokens.length) {
+    memoryTokenListEl.appendChild(createListEmpty("No tokens yet."));
+    return;
+  }
+
+  for (const token of tokens) {
+    const li = document.createElement("li");
+    li.className = "memory-item";
+
+    const title = document.createElement("span");
+    title.className = "memory-item-title";
+    title.textContent = token.token;
+
+    const meta = document.createElement("span");
+    meta.className = "memory-item-meta";
+    meta.textContent = `w:${Number(token.weight || 0).toFixed(2)} • seen:${token.occurrences || 0}`;
+
+    li.appendChild(title);
+    li.appendChild(meta);
+    memoryTokenListEl.appendChild(li);
+  }
+}
+
+function semanticLabel(itemType) {
+  if (itemType === "open_question") {
+    return "open question";
+  }
+  return itemType.replaceAll("_", " ");
+}
+
+function renderSemanticMemory(semantic) {
+  memorySemanticListEl.innerHTML = "";
+  if (!semantic.length) {
+    memorySemanticListEl.appendChild(createListEmpty("No semantic items yet."));
+    return;
+  }
+
+  for (const item of semantic) {
+    const li = document.createElement("li");
+    li.className = "memory-item";
+
+    const title = document.createElement("span");
+    title.className = "memory-item-title";
+    title.textContent = item.evidenceText || item.canonicalText || "(empty)";
+
+    const meta = document.createElement("span");
+    meta.className = "memory-item-meta";
+    meta.textContent = `${semanticLabel(item.itemType || "item")} • conf ${Number(item.confidence || 0).toFixed(2)}`;
+
+    li.appendChild(title);
+    li.appendChild(meta);
+    memorySemanticListEl.appendChild(li);
+  }
+}
+
+function renderSummaryMemory(summaries) {
+  memorySummaryListEl.innerHTML = "";
+  if (!summaries.length) {
+    memorySummaryListEl.appendChild(createListEmpty("No summaries yet."));
+    return;
+  }
+
+  for (const summary of summaries) {
+    const li = document.createElement("li");
+    li.className = "memory-item";
+
+    const title = document.createElement("span");
+    title.className = "memory-item-title";
+    title.textContent = summary.summary || "(empty summary)";
+
+    const meta = document.createElement("span");
+    meta.className = "memory-item-meta";
+    meta.textContent = `turns ${summary.startTurn || 0}-${summary.endTurn || 0}`;
+
+    li.appendChild(title);
+    li.appendChild(meta);
+    memorySummaryListEl.appendChild(li);
+  }
+}
+
+function renderMemoryInspector(memoryEnvelope) {
+  const memory = memoryEnvelope?.memory || null;
+  memoryInspectorState = memory;
+
+  if (!memory) {
+    clearMemoryInspector("No memory available for this thread yet.");
+    return;
+  }
+
+  renderTokenMemory(memory.tokens || []);
+  renderSemanticMemory(memory.semantic || []);
+  renderSummaryMemory(memory.summaries || []);
+
+  const stats = memory.stats || {};
+  setMemoryInspectorStatus(
+    `${Number(stats.tokenCount || 0)} tokens • ${Number(stats.semanticCount || 0)} semantic • ${Number(
+      stats.summaryCount || 0
+    )} summaries`
+  );
+}
+
+async function refreshMemoryInspector() {
+  if (!activeConversationId) {
+    clearMemoryInspector();
+    return;
+  }
+
+  setMemoryInspectorStatus("Refreshing memory...");
+
+  try {
+    const response = await fetch(`/api/conversation/${encodeURIComponent(activeConversationId)}/memory`);
+    const result = await response.json();
+
+    if (!response.ok) {
+      throw new Error(result.error || "Could not refresh memory");
+    }
+
+    renderMemoryInspector(result);
+  } catch (error) {
+    clearMemoryInspector("Memory unavailable.");
+  }
 }
 
 function setMemoryChip(memory) {
@@ -289,6 +442,7 @@ async function forkConversation(turn) {
     }
 
     setStatus(`Fork created from turn ${result.forkFromTurn}. Now on new thread.`);
+    await refreshMemoryInspector();
     await loadHistory();
   } catch (error) {
     setStatus(error.message || "Could not fork conversation.");
@@ -377,6 +531,7 @@ async function loadConversation(conversationId) {
   engineChipEl.textContent = "Engine: restored thread";
   setMemoryChip(result.memory || null);
   setQualityChip(null);
+  await refreshMemoryInspector();
 }
 
 function renderHistory(conversations) {
@@ -465,6 +620,7 @@ async function restoreConversation() {
     setAgentFields(null);
     setMemoryChip(null);
     setQualityChip(null);
+    clearMemoryInspector();
     return;
   }
 
@@ -480,6 +636,7 @@ async function restoreConversation() {
     setAgentFields(null);
     setMemoryChip(null);
     setQualityChip(null);
+    clearMemoryInspector();
   }
 }
 
@@ -497,7 +654,12 @@ clearBtn.addEventListener("click", async () => {
   engineChipEl.textContent = "Engine: waiting";
   setMemoryChip(null);
   setQualityChip(null);
+  clearMemoryInspector();
   await loadHistory();
+});
+
+refreshMemoryBtn.addEventListener("click", async () => {
+  await refreshMemoryInspector();
 });
 
 saveBriefBtn.addEventListener("click", async () => {
@@ -612,6 +774,7 @@ form.addEventListener("submit", async (event) => {
     transcriptEl.innerHTML = "";
     displayedTranscript = [];
     setMemoryChip(null);
+    clearMemoryInspector("Switched topic. Memory will rebuild for the new thread.");
   }
 
   const conversationId = activeConversationId || undefined;
@@ -681,6 +844,9 @@ form.addEventListener("submit", async (event) => {
         }
         setMemoryChip(chunk.memory || null);
         setQualityChip(null);
+        if (!memoryInspectorState) {
+          setMemoryInspectorStatus("Run in progress. Memory details will refresh when done.");
+        }
         finalTopic = chunk.topic || finalTopic;
         return;
       }
@@ -765,12 +931,14 @@ form.addEventListener("submit", async (event) => {
     setStatus(
       `Added ${generatedTurns} turns. Total turns: ${totalTurns}. Topic: ${finalTopic}.${reasonSuffix}${moderatorSuffix}${qualitySuffix}`
     );
+    await refreshMemoryInspector();
     await loadHistory();
   } catch (error) {
     if (String(error.message || "").toLowerCase().includes("not found")) {
       clearConversationState();
       setMemoryChip(null);
       setQualityChip(null);
+      clearMemoryInspector();
       await loadHistory();
     }
 
@@ -784,6 +952,7 @@ form.addEventListener("submit", async (event) => {
 });
 
 setAgentFields(null);
+clearMemoryInspector();
 
 (async () => {
   await loadHistory();

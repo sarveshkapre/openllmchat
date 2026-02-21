@@ -429,6 +429,91 @@ h2 {
   font-style: italic;
 }
 
+.memory-inspector {
+  margin-top: 0.85rem;
+  border: 1px solid rgba(131, 201, 230, 0.18);
+  border-radius: 14px;
+  background: rgba(7, 21, 31, 0.58);
+  padding: 0.7rem;
+}
+
+.memory-inspector-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.memory-inspector-topbar h3 {
+  margin: 0;
+  font-size: 0.88rem;
+}
+
+.memory-inspector-status {
+  color: var(--muted);
+  font-size: 0.8rem;
+  margin: 0.45rem 0 0.55rem;
+}
+
+.memory-inspector-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.6rem;
+}
+
+.memory-card {
+  border: 1px solid rgba(124, 183, 210, 0.2);
+  border-radius: 12px;
+  padding: 0.55rem;
+  background: rgba(8, 20, 30, 0.76);
+  min-height: 170px;
+}
+
+.memory-card h4 {
+  margin: 0 0 0.45rem;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.7rem;
+  letter-spacing: 0.02em;
+  color: #a9cce0;
+}
+
+.memory-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.35rem;
+  max-height: 210px;
+  overflow: auto;
+}
+
+.memory-item {
+  border: 1px solid rgba(125, 186, 214, 0.2);
+  border-radius: 10px;
+  background: rgba(7, 18, 28, 0.85);
+  padding: 0.38rem 0.42rem;
+  display: grid;
+  gap: 0.2rem;
+}
+
+.memory-item-title {
+  font-size: 0.73rem;
+  color: #e7f2f8;
+  line-height: 1.35;
+}
+
+.memory-item-meta {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.63rem;
+  color: #9ab8ca;
+}
+
+.memory-empty {
+  color: #92aabc;
+  font-style: italic;
+  font-size: 0.75rem;
+}
+
 @keyframes reveal-up {
   from {
     opacity: 0;
@@ -466,6 +551,10 @@ h2 {
   }
 
   .agent-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .memory-inspector-grid {
     grid-template-columns: 1fr;
   }
 

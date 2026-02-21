@@ -123,6 +123,29 @@
           </div>
           <div id="status" class="status">Enter a topic to begin.</div>
           <ol id="transcript" class="transcript" aria-live="polite"></ol>
+          <section class="memory-inspector">
+            <div class="memory-inspector-topbar">
+              <h3>Memory Inspector</h3>
+              <button id="refresh-memory-btn" class="secondary" type="button">Refresh memory</button>
+            </div>
+            <p id="memory-inspector-status" class="memory-inspector-status">
+              Start or restore a thread to inspect memory state.
+            </p>
+            <div class="memory-inspector-grid">
+              <article class="memory-card">
+                <h4>High-value tokens</h4>
+                <ul id="memory-token-list" class="memory-list"></ul>
+              </article>
+              <article class="memory-card">
+                <h4>Semantic memory</h4>
+                <ul id="memory-semantic-list" class="memory-list"></ul>
+              </article>
+              <article class="memory-card">
+                <h4>Rolling summaries</h4>
+                <ul id="memory-summary-list" class="memory-list"></ul>
+              </article>
+            </div>
+          </section>
         </section>
       </section>
     </main>

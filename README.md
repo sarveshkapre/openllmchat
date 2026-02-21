@@ -31,6 +31,7 @@ Modern web app where two AI agents discuss a user topic in 10-turn batches while
 - One-click forking from any turn to branch strategy paths without losing context
 - Conversation history sidebar with one-click thread restore
 - Live turn-by-turn streaming so agent replies appear in real time
+- Memory Inspector panel to audit high-value tokens, semantic memory items, and rolling summaries per thread
 - One-click transcript export (copy markdown or download file)
 - Sleek responsive UI with animated transcript rendering
 - Works with OpenAI API or local fallback mode when no API key is set
