@@ -115,10 +115,12 @@ const QUALITY_MIN_TOPIC_COVERAGE = readFloatEnv("QUALITY_MIN_TOPIC_COVERAGE", 0.
 const RATE_LIMIT_WINDOW_MS = readIntEnv("RATE_LIMIT_WINDOW_MS", 60000, 1000, 3600000);
 const RATE_LIMIT_MAX_REQUESTS = readIntEnv("RATE_LIMIT_MAX_REQUESTS", 180, 20, 5000);
 const GENERATION_LIMIT_MAX_REQUESTS = readIntEnv("GENERATION_LIMIT_MAX_REQUESTS", 36, 2, 500);
+const RATE_LIMIT_MAX_KEYS = readIntEnv("RATE_LIMIT_MAX_KEYS", 12000, 2000, 200000);
 const LAB_DEFAULT_TURNS = readIntEnv("LAB_DEFAULT_TURNS", 6, 2, 10);
 
 const apiRateState = new Map();
 const generationRateState = new Map();
+let rateSweepTick = 0;
 
 const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
 const hasOpenAI = Boolean(process.env.OPENAI_API_KEY);
@@ -141,9 +143,38 @@ function getClientKey(req) {
   return String(ip);
 }
 
+function sweepRateLimitState(stateMap, now, maxKeys) {
+  if (stateMap.size === 0) {
+    return;
+  }
+
+  for (const [key, value] of stateMap.entries()) {
+    if (!value || value.resetAt <= now) {
+      stateMap.delete(key);
+    }
+  }
+
+  if (stateMap.size <= maxKeys) {
+    return;
+  }
+
+  const overflow = stateMap.size - maxKeys;
+  const victims = [...stateMap.entries()]
+    .sort((a, b) => Number(a?.[1]?.resetAt || 0) - Number(b?.[1]?.resetAt || 0))
+    .slice(0, overflow);
+
+  for (const [key] of victims) {
+    stateMap.delete(key);
+  }
+}
+
 function applyRateLimit(req, res, next, stateMap, maxRequests, windowMs) {
   const key = getClientKey(req);
   const now = Date.now();
+  rateSweepTick = (rateSweepTick + 1) % 1024;
+  if (rateSweepTick % 64 === 0 || stateMap.size > RATE_LIMIT_MAX_KEYS) {
+    sweepRateLimitState(stateMap, now, RATE_LIMIT_MAX_KEYS);
+  }
   const existing = stateMap.get(key);
 
   if (!existing || existing.resetAt <= now) {

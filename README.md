@@ -89,6 +89,7 @@ Open `http://localhost:3000`.
 - `RATE_LIMIT_WINDOW_MS`: API rate limit window in milliseconds (default `60000`)
 - `RATE_LIMIT_MAX_REQUESTS`: max API requests per client IP per window (default `180`)
 - `GENERATION_LIMIT_MAX_REQUESTS`: max conversation generation POST requests per IP per window (default `36`)
+- `RATE_LIMIT_MAX_KEYS`: max active client keys kept in rate limiter memory before sweeping/pruning (default `12000`)
 - `LAB_DEFAULT_TURNS`: turns per mode in discovery lab runs (default `6`)
 - `PORT`: server port (default `3000`)
 
