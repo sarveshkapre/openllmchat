@@ -275,7 +275,6 @@ export default function HomePage() {
       }
       setActiveConversationId(result.conversationId || conversationId);
       setActiveTopic(result.topic || "");
-      setTopic(result.topic || "");
       setMessages(transcript);
       setTotalTurns(Number(result.totalTurns || transcript.length || 0));
       setEngine("restored");
@@ -397,6 +396,8 @@ export default function HomePage() {
       setTotalTurns(0);
     }
 
+    setActiveTopic(cleanTopic);
+    setTopic("");
     setIsRunning(true);
     setStatus(conversationId ? `Continuing for ${turns} turns...` : `Running ${turns} turns...`);
 
@@ -460,7 +461,6 @@ export default function HomePage() {
           }
           const nextTopic = String(chunk.topic || cleanTopic);
           setActiveTopic(nextTopic);
-          setTopic(nextTopic);
           setEngine(String(chunk.engine || "running"));
           return;
         }
@@ -714,7 +714,7 @@ export default function HomePage() {
           <header className="sticky top-0 z-20 flex items-center justify-between border-b border-border/60 bg-background/70 px-4 py-3 backdrop-blur-xl md:px-6">
             <div className="min-w-0">
               <p className="truncate text-sm font-medium text-foreground">
-                {topic.trim() || "Two-agent conversation"}
+                {activeTopic.trim() || topic.trim() || "Two-agent conversation"}
               </p>
               <p className="text-xs text-muted-foreground">
                 {agentAPreset.label} ↔ {agentBPreset.label}
