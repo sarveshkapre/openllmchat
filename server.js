@@ -101,6 +101,14 @@ function readFloatEnv(name, fallback, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
+function readBoolEnv(name, fallback = false) {
+  const raw = String(process.env[name] || "").trim().toLowerCase();
+  if (!raw) {
+    return fallback;
+  }
+  return ["1", "true", "yes", "on"].includes(raw);
+}
+
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
@@ -117,10 +125,13 @@ const RATE_LIMIT_MAX_REQUESTS = readIntEnv("RATE_LIMIT_MAX_REQUESTS", 180, 20, 5
 const GENERATION_LIMIT_MAX_REQUESTS = readIntEnv("GENERATION_LIMIT_MAX_REQUESTS", 36, 2, 500);
 const RATE_LIMIT_MAX_KEYS = readIntEnv("RATE_LIMIT_MAX_KEYS", 12000, 2000, 200000);
 const LAB_DEFAULT_TURNS = readIntEnv("LAB_DEFAULT_TURNS", 6, 2, 10);
+const TRUST_PROXY = readBoolEnv("TRUST_PROXY", false);
 
 const apiRateState = new Map();
 const generationRateState = new Map();
 let rateSweepTick = 0;
+
+app.set("trust proxy", TRUST_PROXY);
 
 const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
 const hasOpenAI = Boolean(process.env.OPENAI_API_KEY);
@@ -136,10 +147,7 @@ function getEngineLabel() {
 }
 
 function getClientKey(req) {
-  const forwarded = String(req.headers["x-forwarded-for"] || "")
-    .split(",")[0]
-    .trim();
-  const ip = forwarded || req.ip || req.socket?.remoteAddress || "unknown";
+  const ip = req.ip || req.socket?.remoteAddress || "unknown";
   return String(ip);
 }
 
@@ -1653,6 +1661,23 @@ app.post("/api/conversation", async (req, res) => {
     console.error(error);
     return res.status(500).json({ error: "Failed to generate conversation." });
   }
+});
+
+app.use((error, req, res, next) => {
+  if (!error) {
+    return next();
+  }
+
+  if (error.type === "entity.too.large") {
+    return res.status(413).json({ error: "Request payload too large." });
+  }
+
+  if (error.type === "entity.parse.failed" || (error instanceof SyntaxError && "body" in error)) {
+    return res.status(400).json({ error: "Invalid JSON payload." });
+  }
+
+  console.error("Unhandled middleware error:", error);
+  return res.status(500).json({ error: "Internal server error." });
 });
 
 app.listen(port, () => {
