@@ -2,7 +2,15 @@ import dotenv from "dotenv";
 import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { randomUUID } from "node:crypto";
 import OpenAI from "openai";
+import {
+  createConversation,
+  dbPath,
+  getConversation,
+  getMessages,
+  insertMessages
+} from "./db.js";
 
 dotenv.config();
 
@@ -36,7 +44,7 @@ const client = hasOpenAI
     })
   : null;
 
-function formatTranscript(transcript, maxMessages = 10) {
+function formatTranscript(transcript, maxMessages = 12) {
   const start = Math.max(transcript.length - maxMessages, 0);
   return transcript
     .slice(start)
@@ -48,16 +56,16 @@ function localTurn(topic, speaker, transcript) {
   const recent = transcript.slice(-2).map((t) => t.text).join(" ");
   const seeds = [
     `Let us stay focused on ${topic}. A practical angle is to define one core objective and test it quickly.`,
-    `Building on that, we should preserve context by carrying forward the prior point and tightening scope each turn.`,
-    `A relevant constraint is user experience: concise messages, clear sequencing, and consistent topic anchoring.`,
-    `A useful next move is to convert this into a lightweight loop where each reply references the previous claim.`,
-    `To keep relevance high, we can enforce a shared memory summary and include it in every generation step.`
+    "Building on that, we should preserve context by carrying forward the prior point and tightening scope each turn.",
+    "A relevant constraint is user experience: concise messages, clear sequencing, and consistent topic anchoring.",
+    "A useful next move is to convert this into a lightweight loop where each reply references the previous claim.",
+    "To keep relevance high, we can enforce a shared memory summary and include it in every generation step."
   ];
 
   const seed = seeds[transcript.length % seeds.length];
   const hook = recent
-    ? `I agree with the recent point: "${recent.slice(0, 100)}..."`
-    : `Opening thought:`;
+    ? `I agree with the recent point: \"${recent.slice(0, 100)}...\"`
+    : "Opening thought:";
 
   return `${hook} ${seed}`;
 }
@@ -103,34 +111,80 @@ async function generateTurn(topic, speaker, transcript) {
   );
 }
 
+app.get("/api/conversation/:id", (req, res) => {
+  const conversationId = String(req.params.id || "").trim();
+  if (!conversationId) {
+    return res.status(400).json({ error: "Conversation id is required." });
+  }
+
+  const conversation = getConversation(conversationId);
+  if (!conversation) {
+    return res.status(404).json({ error: "Conversation not found." });
+  }
+
+  const transcript = getMessages(conversationId);
+
+  return res.json({
+    conversationId,
+    topic: conversation.topic,
+    totalTurns: transcript.length,
+    transcript
+  });
+});
+
 app.post("/api/conversation", async (req, res) => {
   try {
-    const topic = String(req.body?.topic || "").trim();
     const requestedTurns = Number(req.body?.turns ?? 10);
     const turns = Math.min(10, Math.max(2, Number.isFinite(requestedTurns) ? requestedTurns : 10));
+    const requestedTopic = String(req.body?.topic || "").trim();
+    const requestedConversationId = String(req.body?.conversationId || "").trim();
 
+    let conversation = null;
+    if (requestedConversationId) {
+      conversation = getConversation(requestedConversationId);
+      if (!conversation) {
+        return res.status(404).json({ error: "Conversation not found. Clear and start a new one." });
+      }
+    }
+
+    const topic = conversation?.topic || requestedTopic;
     if (!topic) {
       return res.status(400).json({ error: "Topic is required." });
     }
 
-    const transcript = [];
+    const conversationId = conversation?.id || randomUUID();
+    if (!conversation) {
+      conversation = createConversation(conversationId, topic);
+    }
 
-    for (let turn = 0; turn < turns; turn += 1) {
-      const speaker = AGENTS[turn % AGENTS.length];
+    const transcript = getMessages(conversationId);
+    const newEntries = [];
+
+    for (let i = 0; i < turns; i += 1) {
+      const nextTurn = transcript.length + 1;
+      const speaker = AGENTS[(nextTurn - 1) % AGENTS.length];
       const text = await generateTurn(topic, speaker, transcript);
-      transcript.push({
-        turn: turn + 1,
+
+      const entry = {
+        turn: nextTurn,
         speaker: speaker.name,
         speakerId: speaker.id,
         text
-      });
+      };
+
+      transcript.push(entry);
+      newEntries.push(entry);
     }
 
+    insertMessages(conversationId, newEntries);
+
     return res.json({
+      conversationId,
       topic,
-      turns,
+      turns: newEntries.length,
+      totalTurns: transcript.length,
       engine: hasOpenAI ? `OpenAI (${model})` : "Local fallback generator",
-      transcript
+      transcript: newEntries
     });
   } catch (error) {
     console.error(error);
@@ -140,4 +194,5 @@ app.post("/api/conversation", async (req, res) => {
 
 app.listen(port, () => {
   console.log(`openllmchat running on http://localhost:${port}`);
+  console.log(`SQLite database: ${dbPath}`);
 });

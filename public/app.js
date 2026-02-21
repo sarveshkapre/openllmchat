@@ -6,20 +6,49 @@ const transcriptEl = document.querySelector("#transcript");
 const statusEl = document.querySelector("#status");
 const engineChipEl = document.querySelector("#engine-chip");
 
+const CONVERSATION_ID_KEY = "openllmchat:conversationId";
+const TOPIC_KEY = "openllmchat:topic";
+
+let activeConversationId = localStorage.getItem(CONVERSATION_ID_KEY) || "";
+let activeTopic = localStorage.getItem(TOPIC_KEY) || "";
+
 function setStatus(text) {
   statusEl.textContent = text;
 }
 
-function clearTranscript(message = "Transcript cleared.") {
+function setConversationState(conversationId, topic) {
+  activeConversationId = conversationId;
+  activeTopic = topic;
+  localStorage.setItem(CONVERSATION_ID_KEY, conversationId);
+  localStorage.setItem(TOPIC_KEY, topic);
+}
+
+function clearConversationState() {
+  activeConversationId = "";
+  activeTopic = "";
+  localStorage.removeItem(CONVERSATION_ID_KEY);
+  localStorage.removeItem(TOPIC_KEY);
+}
+
+function renderEmpty(message = "No messages yet.") {
   transcriptEl.innerHTML = "";
   const empty = document.createElement("li");
   empty.className = "empty";
-  empty.textContent = "No messages yet.";
+  empty.textContent = message;
   transcriptEl.appendChild(empty);
+}
+
+function clearTranscript(message = "Transcript cleared.") {
+  renderEmpty();
   setStatus(message);
 }
 
-function appendMessage(entry) {
+function appendMessage(entry, animate = true) {
+  const empty = transcriptEl.querySelector(".empty");
+  if (empty) {
+    empty.remove();
+  }
+
   const item = document.createElement("li");
   item.className = "message";
 
@@ -43,13 +72,56 @@ function appendMessage(entry) {
   item.appendChild(head);
   item.appendChild(text);
 
+  if (!animate) {
+    item.style.animation = "none";
+    item.style.opacity = "1";
+    item.style.transform = "translateY(0)";
+  }
+
   transcriptEl.appendChild(item);
-  item.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  item.scrollIntoView({ behavior: animate ? "smooth" : "auto", block: "nearest" });
 }
 
-clearTranscript("Enter a topic to begin.");
+async function restoreConversation() {
+  if (!activeConversationId) {
+    clearTranscript("Enter a topic to begin.");
+    return;
+  }
+
+  setStatus("Loading previous conversation...");
+
+  try {
+    const response = await fetch(`/api/conversation/${encodeURIComponent(activeConversationId)}`);
+    const result = await response.json();
+
+    if (!response.ok) {
+      throw new Error(result.error || "Could not restore conversation");
+    }
+
+    topicInput.value = result.topic;
+    setConversationState(result.conversationId, result.topic);
+
+    if (!result.transcript.length) {
+      renderEmpty();
+    } else {
+      transcriptEl.innerHTML = "";
+      for (const entry of result.transcript) {
+        appendMessage(entry, false);
+      }
+    }
+
+    setStatus(`Restored ${result.totalTurns} turns on topic: ${result.topic}`);
+    engineChipEl.textContent = "Engine: restored thread";
+  } catch (error) {
+    clearConversationState();
+    clearTranscript("Saved conversation was not found. Start a new topic.");
+    engineChipEl.textContent = "Engine: waiting";
+  }
+}
 
 clearBtn.addEventListener("click", () => {
+  clearConversationState();
+  topicInput.value = "";
   clearTranscript();
   engineChipEl.textContent = "Engine: waiting";
 });
@@ -63,9 +135,24 @@ form.addEventListener("submit", async (event) => {
     return;
   }
 
+  const switchingTopic = Boolean(activeConversationId && activeTopic && topic !== activeTopic);
+  if (switchingTopic) {
+    clearConversationState();
+    transcriptEl.innerHTML = "";
+  }
+
+  const conversationId = activeConversationId || undefined;
+
+  if (!conversationId) {
+    transcriptEl.innerHTML = "";
+  }
+
   startBtn.disabled = true;
-  setStatus("Agents are reasoning through all 10 turns...");
-  transcriptEl.innerHTML = "";
+  setStatus(
+    conversationId
+      ? "Agents are continuing this thread for 10 more turns..."
+      : "Agents are reasoning through all 10 turns..."
+  );
 
   try {
     const response = await fetch("/api/conversation", {
@@ -75,7 +162,8 @@ form.addEventListener("submit", async (event) => {
       },
       body: JSON.stringify({
         topic,
-        turns: 10
+        turns: 10,
+        conversationId
       })
     });
 
@@ -85,6 +173,7 @@ form.addEventListener("submit", async (event) => {
       throw new Error(result.error || "Request failed");
     }
 
+    setConversationState(result.conversationId, result.topic);
     engineChipEl.textContent = `Engine: ${result.engine}`;
 
     for (const entry of result.transcript) {
@@ -92,11 +181,19 @@ form.addEventListener("submit", async (event) => {
       await new Promise((resolve) => setTimeout(resolve, 180));
     }
 
-    setStatus(`Completed ${result.turns} turns on topic: ${result.topic}`);
+    setStatus(`Added ${result.turns} turns. Total turns: ${result.totalTurns}. Topic: ${result.topic}`);
   } catch (error) {
-    clearTranscript("Generation failed.");
+    if (String(error.message || "").toLowerCase().includes("not found")) {
+      clearConversationState();
+    }
+
+    if (!transcriptEl.children.length) {
+      clearTranscript("Generation failed.");
+    }
     setStatus(error.message || "Could not generate conversation.");
   } finally {
     startBtn.disabled = false;
   }
 });
+
+restoreConversation();
