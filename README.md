@@ -87,6 +87,7 @@ Open `http://localhost:3000`.
 - `QUALITY_RETRY_LIMIT`: retries per turn when quality checks fail (default `1`)
 - `QUALITY_MAX_SIMILARITY`: max similarity to previous turn before retry (default `0.9`)
 - `QUALITY_MIN_TOPIC_COVERAGE`: minimum keyword overlap score before retry (default `0.12`)
+- `MAX_TURN_CHARS`: max characters stored per generated turn after normalization (default `1400`)
 - `RATE_LIMIT_WINDOW_MS`: API rate limit window in milliseconds (default `60000`)
 - `RATE_LIMIT_MAX_REQUESTS`: max API requests per client IP per window (default `180`)
 - `GENERATION_LIMIT_MAX_REQUESTS`: max conversation generation POST requests per IP per window (default `36`)

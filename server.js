@@ -120,6 +120,7 @@ const QUALITY_MIN_WORDS = readIntEnv("QUALITY_MIN_WORDS", 9, 4, 40);
 const QUALITY_RETRY_LIMIT = readIntEnv("QUALITY_RETRY_LIMIT", 1, 0, 3);
 const QUALITY_MAX_SIMILARITY = readFloatEnv("QUALITY_MAX_SIMILARITY", 0.9, 0.6, 0.98);
 const QUALITY_MIN_TOPIC_COVERAGE = readFloatEnv("QUALITY_MIN_TOPIC_COVERAGE", 0.12, 0.02, 0.8);
+const MAX_TURN_CHARS = readIntEnv("MAX_TURN_CHARS", 1400, 300, 8000);
 const RATE_LIMIT_WINDOW_MS = readIntEnv("RATE_LIMIT_WINDOW_MS", 60000, 1000, 3600000);
 const RATE_LIMIT_MAX_REQUESTS = readIntEnv("RATE_LIMIT_MAX_REQUESTS", 180, 20, 5000);
 const GENERATION_LIMIT_MAX_REQUESTS = readIntEnv("GENERATION_LIMIT_MAX_REQUESTS", 36, 2, 500);
@@ -213,6 +214,12 @@ app.use("/api", (req, res, next) =>
 );
 
 app.use("/api", (req, res, next) => {
+  res.setHeader("Cache-Control", "no-store, max-age=0");
+  res.setHeader("Pragma", "no-cache");
+  next();
+});
+
+app.use("/api", (req, res, next) => {
   if (req.method !== "POST") {
     return next();
   }
@@ -257,6 +264,16 @@ function normalizeText(text) {
     .replace(/[^a-z0-9\s]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function normalizeTurnText(text) {
+  const normalized = String(text || "").replace(/\s+/g, " ").trim();
+  if (normalized.length <= MAX_TURN_CHARS) {
+    return normalized;
+  }
+
+  const keep = Math.max(1, MAX_TURN_CHARS - 3);
+  return `${normalized.slice(0, keep).trimEnd()}...`;
 }
 
 function tokenSet(text) {
@@ -1056,7 +1073,7 @@ async function runConversationBatch({
         turn: nextTurn,
         speaker: speaker.name,
         speakerId: speaker.id,
-        text: text || generated
+        text: normalizeTurnText(text || generated)
       };
 
       quality = evaluateTurnQuality({
