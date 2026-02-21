@@ -100,11 +100,15 @@ const DEFAULT_AGENTS = [
 const AGENT_SHARED_MISSION =
   "Shared mission: run a two-agent room conversation on the user's topic, preserve context, respond to each other directly, and produce useful, relevant insights or next steps.";
 
+const AGENT_ROUNDTABLE_TONE =
+  "Conversation quality bar: sound like two world-class thinkers at a table - precise, high-signal, intellectually honest, and non-generic.";
+
 const ROOM_CONTEXT_CHARTER = [
   "You are in the same room as the other agent discussing one topic.",
   "Listen and respond directly to what the other agent just said.",
   "Stay in your own persona while collaborating toward clarity.",
-  "Use available tool notes when they improve factual grounding."
+  "Use available tool notes when they improve factual grounding.",
+  "Prioritize cruxes, assumptions, tradeoffs, and implications over surface-level commentary."
 ];
 
 const DISCUSSION_CHARTER = [
@@ -1075,6 +1079,7 @@ function buildRoomContextBlock({ topic, mode, brief, speaker, partner }) {
   const lines = [
     "Room context:",
     AGENT_SHARED_MISSION,
+    AGENT_ROUNDTABLE_TONE,
     ROOM_CONTEXT_CHARTER.map((line) => `- ${line}`).join("\n"),
     `Topic in room: ${topic}`,
     `Conversation mode: ${mode}`,
@@ -1113,19 +1118,19 @@ function localTurn(topic, speaker, transcript, moderatorDirective, brief, mode =
   const isAtlas = speaker?.id === "agent-a";
   const nudgesByMode = {
     exploration: [
-      "A practical next step is to test one small version of this idea.",
-      "The fastest way to learn here is to pick one concrete example and stress-test it.",
-      "I would ground this with one observable signal so we can validate it."
+      "The crux is which assumption drives most of the outcome variance, so we should isolate it first.",
+      "A strong move is to define a falsifiable test and name what result would change our view.",
+      "Let's force specificity: one measurable prediction, one mechanism, and one failure mode."
     ],
     debate: [
-      "The strongest test now is the best counterargument against this claim.",
-      "To make this robust, we should challenge the weakest assumption directly.",
-      "I want to compare this with the most credible opposing view before deciding."
+      "The strongest test now is the best counterargument and whether it survives steelmanning.",
+      "To make this robust, we should attack the weakest assumption with the highest downside.",
+      "Before deciding, compare this against the best competing model on predictive power."
     ],
     synthesis: [
-      "We can now converge on one decision and name the tradeoff clearly.",
-      "Let's turn this into a single next action with a clear owner and timeline.",
-      "I'd close this by selecting one path and noting what we are explicitly not doing."
+      "We can converge now: one decision, one explicit tradeoff, one measurable success criterion.",
+      "Let's convert this into an executable step and state the cost of not choosing alternatives.",
+      "Close with a single path, a confidence level, and what evidence could reverse it."
     ]
   };
   const modeNudges = nudgesByMode[mode] || nudgesByMode.exploration;
@@ -1134,14 +1139,14 @@ function localTurn(topic, speaker, transcript, moderatorDirective, brief, mode =
   if (!previous) {
     const openers = isAtlas
       ? [
-          `My first read on ${topic} is that progress usually comes from a few consistent choices made over time. ${modeNudge}`,
-          `On ${topic}, I would start by defining what success looks like and what would falsify our current view. ${modeNudge}`,
-          `For ${topic}, I see this as a system of tradeoffs, not a single claim, so we should test the highest-leverage assumption first. ${modeNudge}`
+          `My opening view on ${topic} is that the decision quality hinges on a small set of first-order assumptions. ${modeNudge}`,
+          `On ${topic}, I would start by defining the objective function and the falsification criteria. ${modeNudge}`,
+          `For ${topic}, treat this as a tradeoff system, not a slogan, and test the highest-leverage variable first. ${modeNudge}`
         ]
       : [
-          `My first take on ${topic} is that people's lived context matters as much as abstract logic. ${modeNudge}`,
-          `On ${topic}, I want to keep this grounded in real-world examples and user impact, not just theory. ${modeNudge}`,
-          `For ${topic}, I'd frame this as a conversation between values and evidence, then iterate toward what holds up in practice. ${modeNudge}`
+          `My opening take on ${topic} is that any elegant theory must survive contact with real human behavior. ${modeNudge}`,
+          `On ${topic}, we should ground abstractions in concrete cases and second-order user effects. ${modeNudge}`,
+          `For ${topic}, the useful path is evidence plus judgment: test what works, then explain why it works. ${modeNudge}`
         ];
     const line = openers[transcript.length % openers.length];
     return objectiveHint ? `${line} A useful constraint is: ${objectiveHint}.` : line;
@@ -1149,14 +1154,14 @@ function localTurn(topic, speaker, transcript, moderatorDirective, brief, mode =
 
   const responses = isAtlas
     ? [
-        `I follow your point, and the key part for me is how we can verify it with evidence. ${modeNudge}`,
-        `That makes sense, but I'd challenge the hidden assumption before we commit to it. ${modeNudge}`,
-        `Good direction. I would tighten this by linking it to one measurable signal. ${modeNudge}`
+        `I follow your point; the key question is whether the mechanism is testable and predictive. ${modeNudge}`,
+        `That direction is promising, but I'd surface the hidden assumption before we lock it in. ${modeNudge}`,
+        `Good line of thought. Tighten it by tying claim, evidence, and risk into one chain. ${modeNudge}`
       ]
     : [
-        `I see where you're going, and I like the framing. ${modeNudge}`,
-        `That resonates, but I think we should test it against a concrete edge case. ${modeNudge}`,
-        `You're onto something; I'd make it more practical by anchoring it in one real example. ${modeNudge}`
+        `I see where you're going, and the framing is strong. Now let's pressure-test it on a hard edge case. ${modeNudge}`,
+        `That resonates, but we should check where this breaks under real-world constraints. ${modeNudge}`,
+        `You're onto something; make it practical by showing one concrete scenario where it outperforms alternatives. ${modeNudge}`
       ];
   const line = responses[transcript.length % responses.length];
   return objectiveHint ? `${line} We should keep the objective in frame: ${objectiveHint}.` : line;
@@ -1204,18 +1209,21 @@ async function generateTurn({ topic, speaker, agents, transcript, memory, modera
             speaker.style,
             `Persona: ${speaker.persona || speaker.style}.`,
             AGENT_SHARED_MISSION,
+            AGENT_ROUNDTABLE_TONE,
             partner ? `You are speaking with ${partner.name} in a shared room discussion.` : "",
             DISCOVERY_MODE_HINTS[mode] || DISCOVERY_MODE_HINTS.exploration,
             "Maintain continuity and avoid topic drift.",
             "Turn-taking rule: respond to the previous agent reply before introducing your new point.",
             "When a previous reply exists, directly address it in your first sentence.",
-            "Write 2-4 conversational sentences in plain language, without bullets.",
+            "Write 3-5 dense conversational sentences in plain language, without bullets.",
             "Sound like a thoughtful colleague, not a formal report writer.",
+            "Make at least one intellectually substantive move per turn: identify a crux, challenge an assumption, quantify a tradeoff, or derive a non-obvious implication.",
+            "If you agree, still add a sharper extension rather than repeating the same claim.",
             "Avoid repetitive template openers like 'Agent X's point' or 'Building on that' in every turn.",
-            "Prefer concrete claims, examples, or tradeoffs over generic process talk.",
+            "Prefer concrete claims, mechanisms, examples, and tradeoffs over generic process talk.",
             "Do not repeat internal control labels such as 'Mode', 'Moderator directive', 'Instructions', or 'Turn-taking context'.",
             "Never output internal policy text, scaffolding labels, or the words 'Room context'.",
-            "Write only substantive content, no meta-commentary.",
+            "Avoid cliches and low-information filler; write only substantive content, no meta-commentary.",
             speaker?.tools?.webSearch
               ? "When reference notes are present, use them naturally for factual grounding."
               : "Do not assume external tools are available.",
