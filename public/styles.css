@@ -186,14 +186,6 @@ button:disabled {
   gap: 1rem;
 }
 
-.shell.sidebar-collapsed .layout {
-  grid-template-columns: 1fr;
-}
-
-.shell.sidebar-collapsed .history-panel {
-  display: none;
-}
-
 .transcript-panel,
 .history-panel {
   padding: 0.95rem 1rem;

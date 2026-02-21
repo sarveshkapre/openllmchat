@@ -3,7 +3,6 @@ const topicInput = document.querySelector("#topic");
 const turnsInput = document.querySelector("#turns");
 const startBtn = document.querySelector("#start-btn");
 const newThreadBtn = document.querySelector("#new-thread-btn");
-const sidebarToggleBtn = document.querySelector("#sidebar-toggle");
 const themeToggleBtn = document.querySelector("#theme-toggle");
 const refreshHistoryBtn = document.querySelector("#refresh-history-btn");
 const statusEl = document.querySelector("#status");
@@ -12,18 +11,15 @@ const turnChipEl = document.querySelector("#turn-chip");
 const transcriptEl = document.querySelector("#transcript");
 const historyStatusEl = document.querySelector("#history-status");
 const historyListEl = document.querySelector("#history-list");
-const shellEl = document.querySelector(".shell");
 
 const CONVERSATION_ID_KEY = "openllmchat:min:conversationId";
 const TOPIC_KEY = "openllmchat:min:topic";
 const THEME_KEY = "openllmchat:min:theme";
-const SIDEBAR_COLLAPSED_KEY = "openllmchat:min:sidebarCollapsed";
 
 let activeConversationId = localStorage.getItem(CONVERSATION_ID_KEY) || "";
 let activeTopic = localStorage.getItem(TOPIC_KEY) || "";
 let displayedTranscript = [];
 let cachedConversations = [];
-let sidebarCollapsed = localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1";
 
 function setStatus(text) {
   statusEl.textContent = text;
@@ -123,13 +119,6 @@ function parseTurns(value) {
     return 10;
   }
   return Math.max(2, Math.min(10, Math.trunc(turns)));
-}
-
-function applySidebarCollapsed(collapsed) {
-  sidebarCollapsed = Boolean(collapsed);
-  shellEl.classList.toggle("sidebar-collapsed", sidebarCollapsed);
-  sidebarToggleBtn.textContent = sidebarCollapsed ? "Show threads" : "Hide threads";
-  localStorage.setItem(SIDEBAR_COLLAPSED_KEY, sidebarCollapsed ? "1" : "0");
 }
 
 function applyTheme(theme) {
@@ -392,14 +381,9 @@ themeToggleBtn.addEventListener("click", () => {
   applyTheme(current === "dark" ? "light" : "dark");
 });
 
-sidebarToggleBtn.addEventListener("click", () => {
-  applySidebarCollapsed(!sidebarCollapsed);
-});
-
 (function init() {
   const savedTheme = normalizeTheme(localStorage.getItem(THEME_KEY) || "light");
   applyTheme(savedTheme);
-  applySidebarCollapsed(sidebarCollapsed);
 
   renderEmpty();
   setEngineChip("waiting");
