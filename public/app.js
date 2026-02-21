@@ -15,6 +15,7 @@ const refreshMemoryBtn = document.querySelector("#refresh-memory-btn");
 const refreshInsightsBtn = document.querySelector("#refresh-insights-btn");
 const copyInsightsBtn = document.querySelector("#copy-insights-btn");
 const openBestLabBtn = document.querySelector("#open-best-lab-btn");
+const adoptBestModeBtn = document.querySelector("#adopt-best-mode-btn");
 const copyLabReportBtn = document.querySelector("#copy-lab-report-btn");
 const objectiveInput = document.querySelector("#objective");
 const constraintsInput = document.querySelector("#constraints");
@@ -1227,6 +1228,41 @@ openBestLabBtn.addEventListener("click", async () => {
     await loadHistory();
   } catch (error) {
     setStatus(error.message || "Could not open best lab run.");
+  }
+});
+
+adoptBestModeBtn.addEventListener("click", async () => {
+  const best = bestLabRun();
+  if (!best) {
+    setStatus("No lab results yet.");
+    return;
+  }
+
+  const mode = normalizeThreadMode(best.mode || DEFAULT_THREAD_MODE);
+  threadModeSelect.value = mode;
+
+  if (!activeConversationId) {
+    setThreadMeta({
+      title: normalizeThreadTitle(threadTitleInput.value),
+      starred: activeStarred,
+      mode
+    });
+    persistDraftNow();
+    setStatus(`Adopted best mode locally: ${mode}. Start a thread to persist it.`);
+    return;
+  }
+
+  try {
+    await persistThreadMeta(
+      {
+        title: normalizeThreadTitle(threadTitleInput.value),
+        starred: activeStarred,
+        mode
+      },
+      `Adopted best mode: ${mode}.`
+    );
+  } catch (error) {
+    setStatus(error.message || "Could not adopt best mode.");
   }
 });
 

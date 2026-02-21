@@ -45,7 +45,7 @@ Modern web app where two AI agents discuss a user topic in 10-turn batches while
   - runs `exploration`, `debate`, and `synthesis` threads in one request
   - returns side-by-side quality + insight summaries
   - allows fast thread switching into each lab run
-  - includes `Open best run` and `Copy lab report` actions for faster follow-through
+  - includes `Open best run`, `Adopt best mode`, and `Copy lab report` actions for faster follow-through
 - Productivity workflow boosts:
   - Draft autosave/restore for topic, thread settings, brief, and agent studio inputs
   - Keyboard shortcuts: `Cmd/Ctrl + Enter` to run, `Cmd/Ctrl + S` to save all settings
