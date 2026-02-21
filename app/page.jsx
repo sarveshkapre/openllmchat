@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Moon, PanelLeft, PanelLeftClose, Plus, RefreshCcw, Sun, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
@@ -531,27 +530,18 @@ export default function HomePage() {
     return `${conversations.length} conversations`;
   }, [conversations.length, historyLoading]);
 
-  const agentAMessages = useMemo(
-    () => messages.filter((entry) => belongsToAgent(entry, "agent-a", agentAPreset.name)),
-    [agentAPreset.name, messages]
-  );
-  const agentBMessages = useMemo(
-    () => messages.filter((entry) => belongsToAgent(entry, "agent-b", agentBPreset.name)),
-    [agentBPreset.name, messages]
-  );
-
   return (
-    <main className="min-h-screen bg-background">
-      <div className="flex min-h-screen">
+    <main className="h-screen bg-background text-foreground">
+      <div className="flex h-screen">
         <aside
           className={cn(
-            "hidden border-r bg-card/60 transition-all duration-200 ease-out md:flex md:flex-col",
+            "hidden border-r bg-muted/20 transition-all duration-200 ease-out md:flex md:flex-col",
             historyOpen ? "md:w-[300px]" : "md:w-16"
           )}
         >
           <div className={cn("border-b p-3", historyOpen ? "space-y-3" : "space-y-2")}>
             <div className={cn("flex items-center", historyOpen ? "justify-between" : "justify-center")}>
-              {historyOpen ? <p className="text-sm font-medium text-foreground">Saved conversations</p> : null}
+              {historyOpen ? <p className="text-sm font-semibold text-foreground">openllmchat</p> : null}
               <Button
                 variant="ghost"
                 size="icon"
@@ -563,7 +553,7 @@ export default function HomePage() {
             </div>
             {historyOpen ? (
               <>
-                <CardDescription>{historyStatus}</CardDescription>
+                <p className="text-xs text-muted-foreground">{historyStatus}</p>
                 <div className="flex items-center gap-1">
                   <Button variant="secondary" className="flex-1" onClick={onNewThread}>
                     <Plus className="size-4" />
@@ -643,141 +633,161 @@ export default function HomePage() {
           )}
         </aside>
 
-        <section className="flex-1 p-4 md:p-6">
-          <div className="mx-auto max-w-5xl">
-            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <h1 className="text-2xl font-semibold tracking-tight">openllmchat</h1>
-                <p className="text-sm text-muted-foreground">Two agents, one focused conversation.</p>
-              </div>
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="secondary"
-                  size="icon"
-                  aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
-                  onClick={() => applyTheme(theme === "dark" ? "light" : "dark")}
-                >
-                  {theme === "dark" ? <Sun className="size-4" /> : <Moon className="size-4" />}
-                </Button>
-              </div>
+        <section className="flex min-w-0 flex-1 flex-col">
+          <header className="flex items-center justify-between border-b px-4 py-3 md:px-6">
+            <div className="min-w-0">
+              <p className="truncate text-sm font-medium text-foreground">
+                {topic.trim() || "Two-agent conversation"}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {agentAPreset.label} ↔ {agentBPreset.label} · {totalTurns} turns
+              </p>
             </div>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="md:hidden"
+                aria-label={historyOpen ? "Collapse sidebar" : "Expand sidebar"}
+                onClick={() => setHistoryOpen((open) => !open)}
+              >
+                {historyOpen ? <PanelLeftClose className="size-4" /> : <PanelLeft className="size-4" />}
+              </Button>
+              <Button variant="ghost" size="icon" aria-label="New conversation" onClick={onNewThread}>
+                <Plus className="size-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label="Refresh conversation history"
+                onClick={loadHistory}
+                disabled={historyLoading || historyClearing}
+              >
+                <RefreshCcw className={cn("size-4", historyLoading && "animate-spin")} />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+                onClick={() => applyTheme(theme === "dark" ? "light" : "dark")}
+              >
+                {theme === "dark" ? <Sun className="size-4" /> : <Moon className="size-4" />}
+              </Button>
+            </div>
+          </header>
 
-            <Card className="h-[78vh] min-h-[540px] overflow-hidden">
-              <CardHeader className="border-b pb-4">
-                <form
-                  className="grid gap-3 md:grid-cols-[1fr,110px,180px,180px,auto]"
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    if (!isRunning) {
-                      runConversation();
-                    }
-                  }}
-                >
-                  <Input
-                    value={topic}
-                    onChange={(event) => setTopic(event.target.value)}
-                    placeholder="Topic"
-                    maxLength={180}
-                    aria-label="Conversation topic"
-                  />
-                  <Input
-                    type="number"
-                    min={2}
-                    max={10}
-                    value={turnsInput}
-                    onChange={(event) => setTurnsInput(event.target.value)}
-                    aria-label="Turns"
-                  />
-                  <select
-                    value={agentAPersona}
-                    onChange={(event) => setAgentAPersona(event.target.value)}
-                    className="h-10 rounded-md border border-input bg-background px-3 text-sm"
-                    aria-label="Agent A persona"
-                  >
-                    {PERSONA_PRESETS.map((preset) => (
-                      <option key={`agent-a-${preset.id}`} value={preset.id}>
-                        A: {preset.label}
-                      </option>
-                    ))}
-                  </select>
-                  <select
-                    value={agentBPersona}
-                    onChange={(event) => setAgentBPersona(event.target.value)}
-                    className="h-10 rounded-md border border-input bg-background px-3 text-sm"
-                    aria-label="Agent B persona"
-                  >
-                    {PERSONA_PRESETS.map((preset) => (
-                      <option key={`agent-b-${preset.id}`} value={preset.id}>
-                        B: {preset.label}
-                      </option>
-                    ))}
-                  </select>
-                  <Button type="submit" disabled={isRunning}>
-                    {isRunning ? "Running..." : "Start conversation"}
-                  </Button>
-                </form>
-                <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-                  <span>Engine: {engine}</span>
-                  <span>Turns: {totalTurns}</span>
-                  <span>{status}</span>
+          <div className="thread-scroll min-h-0 flex-1 overflow-y-auto">
+            <div className="mx-auto w-full max-w-4xl px-4 py-6 md:px-8">
+              {messages.length === 0 ? (
+                <div className="mx-auto mt-16 max-w-2xl text-center">
+                  <h1 className="text-2xl font-semibold tracking-tight">openllmchat</h1>
+                  <p className="mt-2 text-sm text-muted-foreground">
+                    Start a topic and let two personas discuss it.
+                  </p>
                 </div>
-              </CardHeader>
-              <CardContent className="h-[calc(78vh-122px)] p-4 md:p-5">
-                {messages.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No messages yet. Add a topic and start.</p>
-                ) : (
-                  <div className="grid h-full gap-4 md:grid-cols-2">
-                    <section className="flex min-h-0 flex-col rounded-md border bg-muted/20">
-                      <header className="border-b px-4 py-3">
-                        <p className="text-sm font-semibold">Agent A · {agentAPreset.label}</p>
-                        <p className="text-xs text-muted-foreground">{agentAPreset.persona}</p>
-                      </header>
-                      <div className="thread-scroll min-h-0 flex-1 overflow-y-auto p-3">
-                        {agentAMessages.length === 0 ? (
-                          <p className="text-xs text-muted-foreground">No turns yet.</p>
-                        ) : (
-                          <ul className="space-y-2">
-                            {agentAMessages.map((entry, index) => (
-                              <li key={`a-${entry.turn}-${index}`} className="rounded-md border bg-background px-3 py-2">
-                                <p className="mb-1 font-mono text-[11px] text-muted-foreground">
-                                  Turn {Number(entry.turn || index + 1)}
-                                </p>
-                                <p className="text-sm leading-6 text-foreground/95">{entry.text || ""}</p>
-                              </li>
-                            ))}
-                          </ul>
-                        )}
-                      </div>
-                    </section>
-
-                    <section className="flex min-h-0 flex-col rounded-md border bg-muted/20">
-                      <header className="border-b px-4 py-3">
-                        <p className="text-sm font-semibold">Agent B · {agentBPreset.label}</p>
-                        <p className="text-xs text-muted-foreground">{agentBPreset.persona}</p>
-                      </header>
-                      <div className="thread-scroll min-h-0 flex-1 overflow-y-auto p-3">
-                        {agentBMessages.length === 0 ? (
-                          <p className="text-xs text-muted-foreground">No turns yet.</p>
-                        ) : (
-                          <ul className="space-y-2">
-                            {agentBMessages.map((entry, index) => (
-                              <li key={`b-${entry.turn}-${index}`} className="rounded-md border bg-background px-3 py-2">
-                                <p className="mb-1 font-mono text-[11px] text-muted-foreground">
-                                  Turn {Number(entry.turn || index + 1)}
-                                </p>
-                                <p className="text-sm leading-6 text-foreground/95">{entry.text || ""}</p>
-                              </li>
-                            ))}
-                          </ul>
-                        )}
-                      </div>
-                    </section>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
+              ) : (
+                <ul className="space-y-5">
+                  {messages.map((entry, index) => {
+                    const isLeft = belongsToAgent(entry, "agent-a", agentAPreset.name);
+                    return (
+                      <li
+                        key={`${entry.turn}-${index}`}
+                        className={cn("flex w-full", isLeft ? "justify-start" : "justify-end")}
+                      >
+                        <div className={cn("max-w-[82%] space-y-1", isLeft ? "items-start" : "items-end")}>
+                          <p className={cn("text-xs", isLeft ? "text-muted-foreground" : "text-primary")}>
+                            {formatSpeakerLabel(entry.speaker)} · Turn {Number(entry.turn || index + 1)}
+                          </p>
+                          <div
+                            className={cn(
+                              "rounded-2xl px-4 py-3 text-sm leading-7",
+                              isLeft
+                                ? "border bg-card text-card-foreground"
+                                : "bg-primary text-primary-foreground shadow-sm"
+                            )}
+                          >
+                            {entry.text || ""}
+                          </div>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
           </div>
-          </section>
+
+          <footer className="border-t bg-background/95 px-3 py-3 md:px-6">
+            <form
+              className="mx-auto w-full max-w-4xl rounded-2xl border bg-card p-3"
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (!isRunning) {
+                  runConversation();
+                }
+              }}
+            >
+              <Input
+                value={topic}
+                onChange={(event) => setTopic(event.target.value)}
+                placeholder="Topic"
+                maxLength={180}
+                aria-label="Conversation topic"
+                className="border-0 bg-transparent px-2 shadow-none focus-visible:ring-0"
+              />
+              <div className="mt-2 flex flex-wrap items-center gap-2 border-t pt-2">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Run conversation"
+                  type="submit"
+                  disabled={isRunning}
+                >
+                  <Plus className="size-4" />
+                </Button>
+                <Input
+                  type="number"
+                  min={2}
+                  max={10}
+                  value={turnsInput}
+                  onChange={(event) => setTurnsInput(event.target.value)}
+                  aria-label="Turns"
+                  className="h-9 w-20"
+                />
+                <select
+                  value={agentAPersona}
+                  onChange={(event) => setAgentAPersona(event.target.value)}
+                  className="h-9 min-w-[140px] rounded-md border border-input bg-background px-2 text-sm"
+                  aria-label="Agent A persona"
+                >
+                  {PERSONA_PRESETS.map((preset) => (
+                    <option key={`agent-a-${preset.id}`} value={preset.id}>
+                      A: {preset.label}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={agentBPersona}
+                  onChange={(event) => setAgentBPersona(event.target.value)}
+                  className="h-9 min-w-[140px] rounded-md border border-input bg-background px-2 text-sm"
+                  aria-label="Agent B persona"
+                >
+                  {PERSONA_PRESETS.map((preset) => (
+                    <option key={`agent-b-${preset.id}`} value={preset.id}>
+                      B: {preset.label}
+                    </option>
+                  ))}
+                </select>
+                <div className="ml-auto flex items-center gap-2">
+                  <p className="max-w-[340px] truncate text-xs text-muted-foreground">{status}</p>
+                  <Button type="submit" disabled={isRunning}>
+                    {isRunning ? "Running..." : "Start"}
+                  </Button>
+                </div>
+              </div>
+            </form>
+          </footer>
+        </section>
         </div>
     </main>
   );
