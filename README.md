@@ -35,6 +35,8 @@ Production:
 ```bash
 npm run build
 npm start
+# In another terminal, stop the server on PORT (default 3000)
+npm run stop
 ```
 
 ## Environment

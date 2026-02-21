@@ -7,7 +7,8 @@
   "scripts": {
     "dev": "NODE_ENV=development node --watch server.js",
     "build": "next build",
-    "start": "NODE_ENV=production node server.js"
+    "start": "NODE_ENV=production node server.js",
+    "stop": "sh -c 'PORT_TO_KILL=${PORT:-3000}; PIDS=$(lsof -ti tcp:$PORT_TO_KILL -sTCP:LISTEN); if [ -n \"$PIDS\" ]; then echo \"Stopping openllmchat on port $PORT_TO_KILL (pid: $PIDS)\"; echo \"$PIDS\" | xargs kill; else echo \"No process listening on port $PORT_TO_KILL\"; fi'"
   },
   "keywords": [
     "ai",
