@@ -35,6 +35,7 @@ const memorySummaryListEl = document.querySelector("#memory-summary-list");
 
 const CONVERSATION_ID_KEY = "openllmchat:conversationId";
 const TOPIC_KEY = "openllmchat:topic";
+const DRAFT_KEY = "openllmchat:draft";
 const DEFAULT_AGENTS = [
   {
     agentId: "agent-a",
@@ -59,6 +60,7 @@ let memoryState = null;
 let qualityState = null;
 let memoryInspectorState = null;
 let cachedConversations = [];
+let draftSaveTimer = null;
 
 function setStatus(text) {
   statusEl.textContent = text;
@@ -86,6 +88,7 @@ function setThreadMeta(meta) {
   activeTitle = normalizeThreadTitle(meta?.title || "");
   threadTitleInput.value = activeTitle;
   setStarButtonState(Boolean(meta?.starred));
+  scheduleDraftPersist();
 }
 
 function getThreadMetaPayload() {
@@ -95,8 +98,69 @@ function getThreadMetaPayload() {
   };
 }
 
+function buildDraftState() {
+  return {
+    topic: topicInput.value.trim(),
+    threadTitle: normalizeThreadTitle(threadTitleInput.value),
+    threadStarred: activeStarred,
+    objective: objectiveInput.value.trim(),
+    constraintsText: constraintsInput.value.trim(),
+    doneCriteria: doneCriteriaInput.value.trim(),
+    agents: getAgentPayload()
+  };
+}
+
+function persistDraftNow() {
+  localStorage.setItem(DRAFT_KEY, JSON.stringify(buildDraftState()));
+}
+
+function scheduleDraftPersist() {
+  if (draftSaveTimer) {
+    clearTimeout(draftSaveTimer);
+  }
+  draftSaveTimer = setTimeout(() => {
+    persistDraftNow();
+    draftSaveTimer = null;
+  }, 120);
+}
+
+function clearDraftState() {
+  localStorage.removeItem(DRAFT_KEY);
+}
+
+function restoreDraftState() {
+  const raw = localStorage.getItem(DRAFT_KEY);
+  if (!raw) {
+    return;
+  }
+
+  try {
+    const draft = JSON.parse(raw);
+    if (draft.topic) {
+      topicInput.value = String(draft.topic);
+    }
+    if (draft.objective || draft.constraintsText || draft.doneCriteria) {
+      setBriefFields({
+        objective: draft.objective || "",
+        constraintsText: draft.constraintsText || "",
+        doneCriteria: draft.doneCriteria || ""
+      });
+    }
+    if (Array.isArray(draft.agents) && draft.agents.length) {
+      setAgentFields(draft.agents);
+    }
+    setThreadMeta({
+      title: draft.threadTitle || "",
+      starred: Boolean(draft.threadStarred)
+    });
+  } catch {
+    clearDraftState();
+  }
+}
+
 async function persistThreadMeta(meta, successMessage = "Thread settings saved.") {
   if (!activeConversationId) {
+    persistDraftNow();
     setStatus("Thread settings stored locally. Start a thread to persist them.");
     return false;
   }
@@ -118,6 +182,7 @@ async function persistThreadMeta(meta, successMessage = "Thread settings saved."
     title: result.title || "",
     starred: Boolean(result.starred)
   });
+  persistDraftNow();
   setStatus(successMessage);
   await loadHistory();
   return true;
@@ -314,6 +379,7 @@ function setBriefFields(brief) {
   objectiveInput.value = brief?.objective || "";
   constraintsInput.value = brief?.constraintsText || "";
   doneCriteriaInput.value = brief?.doneCriteria || "";
+  scheduleDraftPersist();
 }
 
 function getAgentPayload() {
@@ -351,7 +417,7 @@ function setAgentFields(agents) {
     ? String(Number(agentB.temperature))
     : String(fallbackB.temperature);
   agentBStyleInput.value = agentB?.style || fallbackB.style;
-
+  scheduleDraftPersist();
 }
 
 function hasCustomAgentOverrides(agents) {
@@ -774,8 +840,26 @@ historySearchInput.addEventListener("input", () => {
   renderHistory(cachedConversations);
 });
 
+for (const field of [
+  topicInput,
+  threadTitleInput,
+  objectiveInput,
+  constraintsInput,
+  doneCriteriaInput,
+  agentANameInput,
+  agentATempInput,
+  agentAStyleInput,
+  agentBNameInput,
+  agentBTempInput,
+  agentBStyleInput
+]) {
+  field.addEventListener("input", scheduleDraftPersist);
+  field.addEventListener("change", scheduleDraftPersist);
+}
+
 clearBtn.addEventListener("click", async () => {
   clearConversationState();
+  clearDraftState();
   topicInput.value = "";
   setThreadMeta(null);
   setBriefFields(null);
@@ -822,31 +906,64 @@ toggleStarBtn.addEventListener("click", async () => {
   }
 });
 
-saveBriefBtn.addEventListener("click", async () => {
-  const brief = getBriefPayload();
-
+async function persistBrief(brief, successMessage = "Conversation brief saved.") {
   if (!activeConversationId) {
+    persistDraftNow();
     setStatus("Brief saved locally. Start a thread to persist it.");
-    return;
+    return false;
   }
 
+  const response = await fetch(`/api/conversation/${encodeURIComponent(activeConversationId)}/brief`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(brief)
+  });
+  const result = await response.json();
+
+  if (!response.ok) {
+    throw new Error(result.error || "Could not save brief");
+  }
+
+  setBriefFields(result.brief || null);
+  persistDraftNow();
+  setStatus(successMessage);
+  await loadHistory();
+  return true;
+}
+
+async function persistAgents(agents, successMessage = "Agent studio settings saved.") {
+  if (!activeConversationId) {
+    persistDraftNow();
+    setStatus("Agent settings saved locally. Start a thread to persist them.");
+    return false;
+  }
+
+  const response = await fetch(`/api/conversation/${encodeURIComponent(activeConversationId)}/agents`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ agents })
+  });
+  const result = await response.json();
+
+  if (!response.ok) {
+    throw new Error(result.error || "Could not save agents");
+  }
+
+  setAgentFields(result.agents || null);
+  persistDraftNow();
+  setStatus(successMessage);
+  await loadHistory();
+  return true;
+}
+
+saveBriefBtn.addEventListener("click", async () => {
+  const brief = getBriefPayload();
   try {
-    const response = await fetch(`/api/conversation/${encodeURIComponent(activeConversationId)}/brief`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(brief)
-    });
-    const result = await response.json();
-
-    if (!response.ok) {
-      throw new Error(result.error || "Could not save brief");
-    }
-
-    setBriefFields(result.brief || null);
-    setStatus("Conversation brief saved.");
-    await loadHistory();
+    await persistBrief(brief);
   } catch (error) {
     setStatus(error.message || "Could not save brief.");
   }
@@ -854,32 +971,28 @@ saveBriefBtn.addEventListener("click", async () => {
 
 saveAgentsBtn.addEventListener("click", async () => {
   const agents = getAgentPayload();
-
-  if (!activeConversationId) {
-    setStatus("Agent settings saved locally. Start a thread to persist them.");
-    return;
-  }
-
   try {
-    const response = await fetch(`/api/conversation/${encodeURIComponent(activeConversationId)}/agents`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({ agents })
-    });
-    const result = await response.json();
-
-    if (!response.ok) {
-      throw new Error(result.error || "Could not save agents");
-    }
-
-    setAgentFields(result.agents || null);
-    setStatus("Agent studio settings saved.");
+    await persistAgents(agents);
   } catch (error) {
     setStatus(error.message || "Could not save agent settings.");
   }
 });
+
+async function saveAllSettings() {
+  if (!activeConversationId) {
+    persistDraftNow();
+    setStatus("Draft saved locally.");
+    return;
+  }
+
+  try {
+    await persistThreadMeta(getThreadMetaPayload(), "Thread settings saved.");
+    await persistBrief(getBriefPayload(), "Brief saved.");
+    await persistAgents(getAgentPayload(), "All settings saved.");
+  } catch (error) {
+    setStatus(error.message || "Could not save all settings.");
+  }
+}
 
 copyBtn.addEventListener("click", async () => {
   if (!displayedTranscript.length) {
@@ -917,6 +1030,25 @@ downloadBtn.addEventListener("click", () => {
   link.remove();
   URL.revokeObjectURL(url);
   setStatus(`Downloaded ${fileName}`);
+});
+
+document.addEventListener("keydown", async (event) => {
+  const hasModifier = event.metaKey || event.ctrlKey;
+  if (!hasModifier) {
+    return;
+  }
+
+  const key = String(event.key || "").toLowerCase();
+  if (key === "s") {
+    event.preventDefault();
+    await saveAllSettings();
+    return;
+  }
+
+  if (key === "enter" && !startBtn.disabled) {
+    event.preventDefault();
+    form.requestSubmit();
+  }
 });
 
 form.addEventListener("submit", async (event) => {
@@ -1123,6 +1255,7 @@ form.addEventListener("submit", async (event) => {
 setThreadMeta(null);
 setAgentFields(null);
 clearMemoryInspector();
+restoreDraftState();
 
 (async () => {
   await loadHistory();

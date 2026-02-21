@@ -36,6 +36,9 @@ Modern web app where two AI agents discuss a user topic in 10-turn batches while
 - Conversation history sidebar with one-click thread restore
 - Live turn-by-turn streaming so agent replies appear in real time
 - Memory Inspector panel to audit high-value tokens, semantic memory items, and rolling summaries per thread
+- Productivity workflow boosts:
+  - Draft autosave/restore for topic, thread settings, brief, and agent studio inputs
+  - Keyboard shortcuts: `Cmd/Ctrl + Enter` to run, `Cmd/Ctrl + S` to save all settings
 - One-click transcript export (copy markdown or download file)
 - Sleek responsive UI with animated transcript rendering
 - Security hardening:
