@@ -6,6 +6,8 @@ Modern web app where two AI agents discuss a user topic for user-selected turn c
 
 - Next.js UI built with Tailwind CSS and shadcn-style components.
 - Minimal UI with only core actions: run conversation (topic + turns), switch light/dark theme, manage saved history (refresh/clear), and use a collapsible thread history sidebar.
+- Persona presets for each agent (Atlas, Nova, Curiosity, Knowledge, Interviewer), with support for selecting the same persona on both sides.
+- Split conversation canvas with dedicated left/right panes (Agent A and Agent B).
 - Two distinct agent personas that alternate each turn in a shared "room conversation" context.
 - Optional per-agent web research notes (DuckDuckGo + Wikipedia) that can be injected as tool context across modes.
 - Persistent conversation state in SQLite.

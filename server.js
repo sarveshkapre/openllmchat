@@ -1115,7 +1115,16 @@ function turnTakingContextBlock(topic, transcript) {
 function localTurn(topic, speaker, transcript, moderatorDirective, brief, mode = "exploration", references = []) {
   const previous = transcript[transcript.length - 1];
   const objectiveHint = brief?.objective ? compactLine(brief.objective, 90) : "";
-  const isAtlas = speaker?.id === "agent-a";
+  const speakerProfile = `${speaker?.name || ""} ${speaker?.persona || ""} ${speaker?.style || ""}`.toLowerCase();
+  const archetype = /\binterviewer\b/.test(speakerProfile)
+    ? "interviewer"
+    : /\bknowledge\b/.test(speakerProfile)
+      ? "knowledge"
+      : /\bcuriosity\b|\bcritical question\b|\basks\b/.test(speakerProfile)
+        ? "curiosity"
+        : speaker?.id === "agent-a"
+          ? "atlas"
+          : "nova";
   const nudgesByMode = {
     exploration: [
       "The crux is which assumption drives most of the outcome variance, so we should isolate it first.",
@@ -1137,32 +1146,66 @@ function localTurn(topic, speaker, transcript, moderatorDirective, brief, mode =
   const modeNudge = modeNudges[transcript.length % modeNudges.length];
 
   if (!previous) {
-    const openers = isAtlas
-      ? [
-          `My opening view on ${topic} is that the decision quality hinges on a small set of first-order assumptions. ${modeNudge}`,
-          `On ${topic}, I would start by defining the objective function and the falsification criteria. ${modeNudge}`,
-          `For ${topic}, treat this as a tradeoff system, not a slogan, and test the highest-leverage variable first. ${modeNudge}`
-        ]
-      : [
-          `My opening take on ${topic} is that any elegant theory must survive contact with real human behavior. ${modeNudge}`,
-          `On ${topic}, we should ground abstractions in concrete cases and second-order user effects. ${modeNudge}`,
-          `For ${topic}, the useful path is evidence plus judgment: test what works, then explain why it works. ${modeNudge}`
-        ];
+    const openersByArchetype = {
+      atlas: [
+        `My opening view on ${topic} is that the decision quality hinges on a small set of first-order assumptions. ${modeNudge}`,
+        `On ${topic}, I would start by defining the objective function and the falsification criteria. ${modeNudge}`,
+        `For ${topic}, treat this as a tradeoff system, not a slogan, and test the highest-leverage variable first. ${modeNudge}`
+      ],
+      nova: [
+        `My opening take on ${topic} is that any elegant theory must survive contact with real human behavior. ${modeNudge}`,
+        `On ${topic}, we should ground abstractions in concrete cases and second-order user effects. ${modeNudge}`,
+        `For ${topic}, the useful path is evidence plus judgment: test what works, then explain why it works. ${modeNudge}`
+      ],
+      curiosity: [
+        `Before we lock in a view on ${topic}, what assumption are we treating as obvious that might actually be fragile? ${modeNudge}`,
+        `On ${topic}, what is the most interesting unresolved question whose answer would change the whole direction? ${modeNudge}`,
+        `If we pressure-test ${topic}, which counterintuitive possibility deserves attention first? ${modeNudge}`
+      ],
+      knowledge: [
+        `A direct answer on ${topic}: outcomes improve when assumptions are explicit, metrics are observable, and tradeoffs are chosen deliberately. ${modeNudge}`,
+        `The core answer for ${topic} is to pair a clear mechanism with measurable validation and tight feedback loops. ${modeNudge}`,
+        `In practical terms, ${topic} works best when decision criteria, constraints, and failure conditions are specified upfront. ${modeNudge}`
+      ],
+      interviewer: [
+        `On ${topic}, what is your core thesis in one sentence, and what evidence would falsify it?`,
+        `For ${topic}, what assumption carries the highest downside risk if it is wrong?`,
+        `On ${topic}, what concrete example best supports your claim, and what is the strongest counterexample?`
+      ]
+    };
+    const openers = openersByArchetype[archetype] || openersByArchetype.nova;
     const line = openers[transcript.length % openers.length];
     return objectiveHint ? `${line} A useful constraint is: ${objectiveHint}.` : line;
   }
 
-  const responses = isAtlas
-    ? [
-        `I follow your point; the key question is whether the mechanism is testable and predictive. ${modeNudge}`,
-        `That direction is promising, but I'd surface the hidden assumption before we lock it in. ${modeNudge}`,
-        `Good line of thought. Tighten it by tying claim, evidence, and risk into one chain. ${modeNudge}`
-      ]
-    : [
-        `I see where you're going, and the framing is strong. Now let's pressure-test it on a hard edge case. ${modeNudge}`,
-        `That resonates, but we should check where this breaks under real-world constraints. ${modeNudge}`,
-        `You're onto something; make it practical by showing one concrete scenario where it outperforms alternatives. ${modeNudge}`
-      ];
+  const responsesByArchetype = {
+    atlas: [
+      `I follow your point; the key question is whether the mechanism is testable and predictive. ${modeNudge}`,
+      `That direction is promising, but I'd surface the hidden assumption before we lock it in. ${modeNudge}`,
+      `Good line of thought. Tighten it by tying claim, evidence, and risk into one chain. ${modeNudge}`
+    ],
+    nova: [
+      `I see where you're going, and the framing is strong. Now let's pressure-test it on a hard edge case. ${modeNudge}`,
+      `That resonates, but we should check where this breaks under real-world constraints. ${modeNudge}`,
+      `You're onto something; make it practical by showing one concrete scenario where it outperforms alternatives. ${modeNudge}`
+    ],
+    curiosity: [
+      `That is interesting. What would we need to observe to know this is genuinely true rather than merely plausible? ${modeNudge}`,
+      `I want to push deeper: which implicit assumption, if inverted, would force a different conclusion? ${modeNudge}`,
+      `Critical question: what are we not measuring that could overturn this argument? ${modeNudge}`
+    ],
+    knowledge: [
+      `Direct answer: the strongest way to validate this is to define the mechanism, expected signal, and decision threshold explicitly. ${modeNudge}`,
+      `Evidence-based answer: we should compare alternatives on predictive accuracy, implementation cost, and downside risk. ${modeNudge}`,
+      `Concrete answer: prioritize the option with the best risk-adjusted impact and a short learning cycle. ${modeNudge}`
+    ],
+    interviewer: [
+      "What is the single most important claim you are making, and how would you prove it wrong?",
+      "If this recommendation fails, where does it fail first and what early warning signal appears?",
+      "Which tradeoff are you accepting explicitly, and why is that tradeoff worth it?"
+    ]
+  };
+  const responses = responsesByArchetype[archetype] || responsesByArchetype.nova;
   const line = responses[transcript.length % responses.length];
   return objectiveHint ? `${line} We should keep the objective in frame: ${objectiveHint}.` : line;
 }
