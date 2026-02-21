@@ -3,12 +3,19 @@ const topicInput = document.querySelector("#topic");
 const startBtn = document.querySelector("#start-btn");
 const clearBtn = document.querySelector("#clear-btn");
 const saveBriefBtn = document.querySelector("#save-brief-btn");
+const saveAgentsBtn = document.querySelector("#save-agents-btn");
 const copyBtn = document.querySelector("#copy-btn");
 const downloadBtn = document.querySelector("#download-btn");
 const refreshHistoryBtn = document.querySelector("#refresh-history-btn");
 const objectiveInput = document.querySelector("#objective");
 const constraintsInput = document.querySelector("#constraints");
 const doneCriteriaInput = document.querySelector("#done-criteria");
+const agentANameInput = document.querySelector("#agent-a-name");
+const agentATempInput = document.querySelector("#agent-a-temp");
+const agentAStyleInput = document.querySelector("#agent-a-style");
+const agentBNameInput = document.querySelector("#agent-b-name");
+const agentBTempInput = document.querySelector("#agent-b-temp");
+const agentBStyleInput = document.querySelector("#agent-b-style");
 const transcriptEl = document.querySelector("#transcript");
 const statusEl = document.querySelector("#status");
 const engineChipEl = document.querySelector("#engine-chip");
@@ -19,6 +26,20 @@ const historyStatusEl = document.querySelector("#history-status");
 
 const CONVERSATION_ID_KEY = "openllmchat:conversationId";
 const TOPIC_KEY = "openllmchat:topic";
+const DEFAULT_AGENTS = [
+  {
+    agentId: "agent-a",
+    name: "Agent Atlas",
+    style: "You are analytical, concrete, and strategic.",
+    temperature: 0.45
+  },
+  {
+    agentId: "agent-b",
+    name: "Agent Nova",
+    style: "You are creative, precise, and challenge assumptions with examples.",
+    temperature: 0.72
+  }
+];
 
 let activeConversationId = localStorage.getItem(CONVERSATION_ID_KEY) || "";
 let activeTopic = localStorage.getItem(TOPIC_KEY) || "";
@@ -78,6 +99,54 @@ function setBriefFields(brief) {
   objectiveInput.value = brief?.objective || "";
   constraintsInput.value = brief?.constraintsText || "";
   doneCriteriaInput.value = brief?.doneCriteria || "";
+}
+
+function getAgentPayload() {
+  return [
+    {
+      agentId: "agent-a",
+      name: agentANameInput.value.trim(),
+      style: agentAStyleInput.value.trim(),
+      temperature: Number(agentATempInput.value)
+    },
+    {
+      agentId: "agent-b",
+      name: agentBNameInput.value.trim(),
+      style: agentBStyleInput.value.trim(),
+      temperature: Number(agentBTempInput.value)
+    }
+  ];
+}
+
+function setAgentFields(agents) {
+  const byId = new Map((agents || []).map((agent) => [agent.agentId || agent.id, agent]));
+  const fallbackA = DEFAULT_AGENTS[0];
+  const fallbackB = DEFAULT_AGENTS[1];
+  const agentA = byId.get("agent-a");
+  const agentB = byId.get("agent-b");
+
+  agentANameInput.value = agentA?.name || fallbackA.name;
+  agentATempInput.value = Number.isFinite(Number(agentA?.temperature))
+    ? String(Number(agentA.temperature))
+    : String(fallbackA.temperature);
+  agentAStyleInput.value = agentA?.style || fallbackA.style;
+
+  agentBNameInput.value = agentB?.name || fallbackB.name;
+  agentBTempInput.value = Number.isFinite(Number(agentB?.temperature))
+    ? String(Number(agentB.temperature))
+    : String(fallbackB.temperature);
+  agentBStyleInput.value = agentB?.style || fallbackB.style;
+
+}
+
+function hasCustomAgentOverrides(agents) {
+  return agents.some((agent, index) => {
+    const fallback = DEFAULT_AGENTS[index];
+    const nameChanged = (agent.name || "").trim() !== fallback.name;
+    const styleChanged = (agent.style || "").trim() !== fallback.style;
+    const tempChanged = Math.abs(Number(agent.temperature || 0) - Number(fallback.temperature || 0)) > 0.001;
+    return nameChanged || styleChanged || tempChanged;
+  });
 }
 
 function clearConversationState() {
@@ -205,6 +274,7 @@ async function forkConversation(turn) {
     topicInput.value = result.topic;
     setConversationState(result.conversationId, result.topic);
     setBriefFields(result.brief || null);
+    setAgentFields(result.agents || null);
     setMemoryChip(result.memory || null);
     setQualityChip(null);
 
@@ -250,6 +320,8 @@ function toMarkdownTranscript() {
     `- Objective: ${objectiveInput.value.trim() || "n/a"}`,
     `- Constraints: ${constraintsInput.value.trim() || "n/a"}`,
     `- Done criteria: ${doneCriteriaInput.value.trim() || "n/a"}`,
+    `- Agent A: ${agentANameInput.value.trim() || "Agent Atlas"} (temp ${agentATempInput.value || "0.45"})`,
+    `- Agent B: ${agentBNameInput.value.trim() || "Agent Nova"} (temp ${agentBTempInput.value || "0.72"})`,
     ``,
     `## Turns`,
     ``
@@ -289,6 +361,7 @@ async function loadConversation(conversationId) {
   topicInput.value = result.topic;
   setConversationState(result.conversationId, result.topic);
   setBriefFields(result.brief || null);
+  setAgentFields(result.agents || null);
 
   if (!result.transcript.length) {
     renderEmpty();
@@ -337,9 +410,10 @@ function renderHistory(conversations) {
     const forkMeta = conversation.parentConversationId
       ? ` • fork@${conversation.forkFromTurn ?? 0}`
       : "";
+    const agentMeta = conversation.hasCustomAgents ? " • custom agents" : "";
     meta.textContent = `${conversation.totalTurns} turns • ${formatUpdatedAt(conversation.updatedAt)}${
       conversation.hasBrief ? " • brief" : ""
-    }${forkMeta}`;
+    }${agentMeta}${forkMeta}`;
 
     button.appendChild(topic);
     button.appendChild(meta);
@@ -388,6 +462,7 @@ async function restoreConversation() {
   if (!activeConversationId) {
     clearTranscript("Enter a topic to begin.");
     setBriefFields(null);
+    setAgentFields(null);
     setMemoryChip(null);
     setQualityChip(null);
     return;
@@ -402,6 +477,7 @@ async function restoreConversation() {
     clearTranscript("Saved conversation was not found. Start a new topic.");
     engineChipEl.textContent = "Engine: waiting";
     setBriefFields(null);
+    setAgentFields(null);
     setMemoryChip(null);
     setQualityChip(null);
   }
@@ -416,6 +492,7 @@ clearBtn.addEventListener("click", async () => {
   clearConversationState();
   topicInput.value = "";
   setBriefFields(null);
+  setAgentFields(null);
   clearTranscript("Started a fresh thread.");
   engineChipEl.textContent = "Engine: waiting";
   setMemoryChip(null);
@@ -450,6 +527,35 @@ saveBriefBtn.addEventListener("click", async () => {
     await loadHistory();
   } catch (error) {
     setStatus(error.message || "Could not save brief.");
+  }
+});
+
+saveAgentsBtn.addEventListener("click", async () => {
+  const agents = getAgentPayload();
+
+  if (!activeConversationId) {
+    setStatus("Agent settings saved locally. Start a thread to persist them.");
+    return;
+  }
+
+  try {
+    const response = await fetch(`/api/conversation/${encodeURIComponent(activeConversationId)}/agents`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ agents })
+    });
+    const result = await response.json();
+
+    if (!response.ok) {
+      throw new Error(result.error || "Could not save agents");
+    }
+
+    setAgentFields(result.agents || null);
+    setStatus("Agent studio settings saved.");
+  } catch (error) {
+    setStatus(error.message || "Could not save agent settings.");
   }
 });
 
@@ -510,6 +616,8 @@ form.addEventListener("submit", async (event) => {
 
   const conversationId = activeConversationId || undefined;
   const brief = getBriefPayload();
+  const agents = getAgentPayload();
+  const includeAgents = hasCustomAgentOverrides(agents);
 
   if (!conversationId) {
     transcriptEl.innerHTML = "";
@@ -524,17 +632,22 @@ form.addEventListener("submit", async (event) => {
   );
 
   try {
+    const payload = {
+      topic,
+      turns: 10,
+      conversationId,
+      ...brief
+    };
+    if (includeAgents) {
+      payload.agents = agents;
+    }
+
     const response = await fetch("/api/conversation/stream", {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
       },
-      body: JSON.stringify({
-        topic,
-        turns: 10,
-        conversationId,
-        ...brief
-      })
+      body: JSON.stringify(payload)
     });
 
     if (!response.ok) {
@@ -562,6 +675,9 @@ form.addEventListener("submit", async (event) => {
         engineChipEl.textContent = `Engine: ${chunk.engine}`;
         if (chunk.brief) {
           setBriefFields(chunk.brief);
+        }
+        if (chunk.agents) {
+          setAgentFields(chunk.agents);
         }
         setMemoryChip(chunk.memory || null);
         setQualityChip(null);
@@ -600,6 +716,9 @@ form.addEventListener("submit", async (event) => {
         finalTopic = chunk.topic || finalTopic;
         if (chunk.brief) {
           setBriefFields(chunk.brief);
+        }
+        if (chunk.agents) {
+          setAgentFields(chunk.agents);
         }
         stopReason = chunk.stopReason || stopReason;
         setMemoryChip(chunk.memory || null);
@@ -663,6 +782,8 @@ form.addEventListener("submit", async (event) => {
     startBtn.disabled = false;
   }
 });
+
+setAgentFields(null);
 
 (async () => {
   await loadHistory();

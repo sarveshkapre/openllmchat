@@ -26,6 +26,17 @@ db.exec(`
     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
   );
 
+  CREATE TABLE IF NOT EXISTS conversation_agents (
+    conversation_id TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    style TEXT NOT NULL,
+    temperature REAL NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (conversation_id, agent_id),
+    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+  );
+
   CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     conversation_id TEXT NOT NULL,
@@ -165,10 +176,15 @@ const listConversationsStmt = db.prepare(`
     CASE
       WHEN b.objective <> '' OR b.constraints_text <> '' OR b.done_criteria <> '' THEN 1
       ELSE 0
-    END AS hasBrief
+    END AS hasBrief,
+    CASE
+      WHEN COUNT(a.agent_id) > 0 THEN 1
+      ELSE 0
+    END AS hasCustomAgents
   FROM conversations c
   LEFT JOIN messages m ON m.conversation_id = c.id
   LEFT JOIN conversation_briefs b ON b.conversation_id = c.id
+  LEFT JOIN conversation_agents a ON a.conversation_id = c.id
   GROUP BY c.id
   ORDER BY c.updated_at DESC
   LIMIT ?
@@ -201,6 +217,40 @@ const upsertConversationBriefStmt = db.prepare(`
     objective = excluded.objective,
     constraints_text = excluded.constraints_text,
     done_criteria = excluded.done_criteria,
+    updated_at = CURRENT_TIMESTAMP
+`);
+
+const listConversationAgentsStmt = db.prepare(`
+  SELECT
+    agent_id AS agentId,
+    name,
+    style,
+    temperature,
+    updated_at AS updatedAt
+  FROM conversation_agents
+  WHERE conversation_id = ?
+  ORDER BY agent_id ASC
+`);
+
+const upsertConversationAgentStmt = db.prepare(`
+  INSERT INTO conversation_agents (
+    conversation_id,
+    agent_id,
+    name,
+    style,
+    temperature
+  )
+  VALUES (
+    @conversationId,
+    @agentId,
+    @name,
+    @style,
+    @temperature
+  )
+  ON CONFLICT(conversation_id, agent_id) DO UPDATE SET
+    name = excluded.name,
+    style = excluded.style,
+    temperature = excluded.temperature,
     updated_at = CURRENT_TIMESTAMP
 `);
 
@@ -385,6 +435,18 @@ const upsertSemanticMemoryTx = db.transaction((conversationId, entries) => {
   }
 });
 
+const upsertConversationAgentsTx = db.transaction((conversationId, agents) => {
+  for (const agent of agents) {
+    upsertConversationAgentStmt.run({
+      conversationId,
+      agentId: agent.agentId,
+      name: agent.name,
+      style: agent.style,
+      temperature: agent.temperature
+    });
+  }
+});
+
 function getConversation(conversationId) {
   return getConversationStmt.get(conversationId) || null;
 }
@@ -423,7 +485,8 @@ function listConversations(limit = 20) {
   const safeLimit = Math.min(100, Math.max(1, Number(limit) || 20));
   return listConversationsStmt.all(safeLimit).map((row) => ({
     ...row,
-    hasBrief: Boolean(row.hasBrief)
+    hasBrief: Boolean(row.hasBrief),
+    hasCustomAgents: Boolean(row.hasCustomAgents)
   }));
 }
 
@@ -445,6 +508,18 @@ function upsertConversationBrief(conversationId, brief) {
     constraintsText: brief.constraintsText || "",
     doneCriteria: brief.doneCriteria || ""
   });
+}
+
+function getConversationAgents(conversationId) {
+  return listConversationAgentsStmt.all(conversationId);
+}
+
+function upsertConversationAgents(conversationId, agents) {
+  if (!Array.isArray(agents) || agents.length === 0) {
+    return;
+  }
+
+  upsertConversationAgentsTx(conversationId, agents);
 }
 
 function upsertMemoryTokens(conversationId, entries) {
@@ -516,6 +591,7 @@ export {
   dbPath,
   getConversation,
   getConversationBrief,
+  getConversationAgents,
   getLastSummaryTurn,
   getMemoryStats,
   getMessages,
@@ -530,6 +606,7 @@ export {
   pruneMemoryTokens,
   pruneSemanticItems,
   upsertConversationBrief,
+  upsertConversationAgents,
   upsertMemoryTokens,
   upsertSemanticItems
 };

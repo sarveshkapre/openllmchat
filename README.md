@@ -25,6 +25,9 @@ Modern web app where two AI agents discuss a user topic in 10-turn batches while
   - Constraints
   - Done criteria
   - Brief is persisted and used by both speaker prompts and moderator checks
+- Agent Studio per thread:
+  - Customize Agent A/B name, style, and temperature
+  - Persists per conversation and is reused for stream/non-stream/fork flows
 - One-click forking from any turn to branch strategy paths without losing context
 - Conversation history sidebar with one-click thread restore
 - Live turn-by-turn streaming so agent replies appear in real time
@@ -79,25 +82,39 @@ Request body:
   "conversationId": "optional-existing-conversation-id",
   "objective": "Produce a concrete architecture recommendation",
   "constraintsText": "Low latency, auditability, and minimal cost",
-  "doneCriteria": "Both agents align on one plan with tradeoffs and next steps"
+  "doneCriteria": "Both agents align on one plan with tradeoffs and next steps",
+  "agents": [
+    {
+      "id": "agent-a",
+      "name": "Dr. Ada",
+      "style": "You are exact and systems-focused.",
+      "temperature": 0.61
+    },
+    {
+      "id": "agent-b",
+      "temperature": 0.2
+    }
+  ]
 }
 ```
 
-Response includes generated turns, total turns, memory stats, brief, quality summary, and stop reason.
+`agents` is optional and supports partial updates (`name`, `style`, and `temperature`) for `agent-a` / `agent-b`.
+
+Response includes generated turns, total turns, memory stats, brief, agents, quality summary, and stop reason.
 
 ### `POST /api/conversation/stream`
 
 Same behavior as `POST /api/conversation`, but returns newline-delimited JSON chunks for live UI updates:
 
-- `meta`: conversation info, engine, memory stats, brief, charter, guardrails
+- `meta`: conversation info, engine, memory stats, brief, agents, charter, guardrails
 - `retry`: quality optimizer retry event
 - `turn`: one generated turn plus quality stats
 - `moderator`: moderator assessment/directive
-- `done`: final summary with stop reason, brief, quality summary, and updated memory stats
+- `done`: final summary with stop reason, brief, agents, quality summary, and updated memory stats
 
 ### `GET /api/conversation/:id`
 
-Returns a saved conversation transcript, topic, brief, parent/fork metadata, and memory stats.
+Returns a saved conversation transcript, topic, brief, agents, parent/fork metadata, and memory stats.
 
 ### `GET /api/conversation/:id/brief`
 
@@ -106,6 +123,15 @@ Returns only the persisted brief for a conversation.
 ### `POST /api/conversation/:id/brief`
 
 Updates brief fields for an existing conversation.
+
+### `GET /api/conversation/:id/agents`
+
+Returns only the persisted agent configuration for a conversation.
+
+### `POST /api/conversation/:id/agents`
+
+Updates agent fields (`name`, `style`, `temperature`) for `agent-a` / `agent-b`.
+Request can be partial and only changes the provided fields.
 
 ### `POST /api/conversation/:id/fork`
 
@@ -119,7 +145,7 @@ Request body (optional):
 }
 ```
 
-Returns the new `conversationId`, inherited brief, copied transcript, and memory stats.
+Returns the new `conversationId`, inherited brief, inherited agents, copied transcript, and memory stats.
 
 ### `GET /api/conversation/:id/memory`
 
@@ -129,7 +155,8 @@ Returns compressed memory details for a conversation:
 - rolling summaries
 - structured semantic memory records
 - memory stats
+- active agent configuration
 
 ### `GET /api/conversations?limit=30`
 
-Returns recent conversation threads with topic, updated time, turn count, `hasBrief`, and fork metadata.
+Returns recent conversation threads with topic, updated time, turn count, `hasBrief`, `hasCustomAgents`, and fork metadata.

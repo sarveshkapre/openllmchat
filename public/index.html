@@ -68,6 +68,32 @@
             ></textarea>
           </div>
         </section>
+        <section class="agent-panel">
+          <div class="brief-topbar">
+            <h2>Agent Studio</h2>
+            <button id="save-agents-btn" class="secondary" type="button">Save agents</button>
+          </div>
+          <div class="agent-grid">
+            <article class="agent-card">
+              <p class="agent-label">Agent A</p>
+              <label for="agent-a-name">Name</label>
+              <input id="agent-a-name" type="text" placeholder="Agent Atlas" />
+              <label for="agent-a-temp">Temperature</label>
+              <input id="agent-a-temp" type="number" min="0" max="1.2" step="0.01" />
+              <label for="agent-a-style">Style</label>
+              <textarea id="agent-a-style" rows="2" placeholder="Analytical, concrete, strategic."></textarea>
+            </article>
+            <article class="agent-card">
+              <p class="agent-label">Agent B</p>
+              <label for="agent-b-name">Name</label>
+              <input id="agent-b-name" type="text" placeholder="Agent Nova" />
+              <label for="agent-b-temp">Temperature</label>
+              <input id="agent-b-temp" type="number" min="0" max="1.2" step="0.01" />
+              <label for="agent-b-style">Style</label>
+              <textarea id="agent-b-style" rows="2" placeholder="Creative, precise, challenges assumptions."></textarea>
+            </article>
+          </div>
+        </section>
         <div class="meta-row">
           <span class="chip">10 turns fixed</span>
           <span class="chip" id="engine-chip">Engine: waiting</span>

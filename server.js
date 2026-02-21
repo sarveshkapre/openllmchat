@@ -8,11 +8,13 @@ import {
   createConversation,
   dbPath,
   getConversation,
+  getConversationAgents,
   getConversationBrief,
   getMessages,
   getMessagesUpToTurn,
   insertMessages,
   listConversations,
+  upsertConversationAgents,
   upsertConversationBrief
 } from "./db.js";
 import {
@@ -32,7 +34,7 @@ const __dirname = path.dirname(__filename);
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
 
-const AGENTS = [
+const DEFAULT_AGENTS = [
   {
     id: "agent-a",
     name: "Agent Atlas",
@@ -64,6 +66,10 @@ function readIntEnv(name, fallback, min, max) {
 function readFloatEnv(name, fallback, min, max) {
   const raw = Number(process.env[name]);
   const value = Number.isFinite(raw) ? raw : fallback;
+  return Math.max(min, Math.min(max, value));
+}
+
+function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
@@ -307,6 +313,93 @@ function mergeBriefPatch(currentBrief, body, parsedBrief) {
   };
 }
 
+function sanitizeAgentName(value, fallback) {
+  const text = String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 48);
+  return text || fallback;
+}
+
+function sanitizeAgentStyle(value, fallback) {
+  const text = String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 320);
+  return text || fallback;
+}
+
+function sanitizeAgentTemperature(value, fallback) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) {
+    return fallback;
+  }
+
+  return Number(clamp(number, 0, 1.2).toFixed(2));
+}
+
+function hasAgentPayload(body) {
+  return Boolean(body && typeof body === "object" && Object.prototype.hasOwnProperty.call(body, "agents"));
+}
+
+function parseAgentConfigFromBody(body) {
+  if (!Array.isArray(body?.agents)) {
+    return [];
+  }
+
+  return body.agents
+    .filter((agent) => agent && typeof agent === "object")
+    .map((agent) => ({
+      agentId: String(agent.agentId || agent.id || "").trim(),
+      name: Object.prototype.hasOwnProperty.call(agent, "name")
+        ? sanitizeAgentName(agent.name, "")
+        : undefined,
+      style: Object.prototype.hasOwnProperty.call(agent, "style")
+        ? sanitizeAgentStyle(agent.style, "")
+        : undefined,
+      temperature: Object.prototype.hasOwnProperty.call(agent, "temperature")
+        ? sanitizeAgentTemperature(agent.temperature, 0.6)
+        : undefined
+    }))
+    .filter((agent) => agent.agentId === "agent-a" || agent.agentId === "agent-b");
+}
+
+function normalizeAgentRow(agentId, input) {
+  const fallback = DEFAULT_AGENTS.find((item) => item.id === agentId);
+  return {
+    agentId,
+    id: agentId,
+    name: sanitizeAgentName(input?.name, fallback?.name || "Agent"),
+    style: sanitizeAgentStyle(input?.style, fallback?.style || "Stay focused and useful."),
+    temperature: sanitizeAgentTemperature(input?.temperature, fallback?.temperature || 0.6)
+  };
+}
+
+function mapStoredAgents(stored) {
+  const byId = new Map((stored || []).map((agent) => [agent.agentId, agent]));
+  return DEFAULT_AGENTS.map((fallback) => normalizeAgentRow(fallback.id, byId.get(fallback.id)));
+}
+
+function mergeAgentConfig(existingAgents, incomingAgents) {
+  if (!incomingAgents.length) {
+    return existingAgents;
+  }
+
+  const incomingMap = new Map(incomingAgents.map((agent) => [agent.agentId, agent]));
+  return existingAgents.map((current) => {
+    const incoming = incomingMap.get(current.agentId);
+    if (!incoming) {
+      return normalizeAgentRow(current.agentId, current);
+    }
+
+    return normalizeAgentRow(current.agentId, {
+      name: incoming.name ?? current.name,
+      style: incoming.style ?? current.style,
+      temperature: incoming.temperature ?? current.temperature
+    });
+  });
+}
+
 function parseJsonObject(text) {
   if (!text) {
     return null;
@@ -434,7 +527,9 @@ async function resolveConversation(body) {
   const requestedTopic = String(body?.topic || "").trim();
   const requestedConversationId = String(body?.conversationId || "").trim();
   const requestedBrief = parseBriefFromBody(body);
+  const requestedAgents = parseAgentConfigFromBody(body);
   const shouldUpdateBrief = hasBriefPayload(body);
+  const shouldUpdateAgents = hasAgentPayload(body);
 
   let conversation = null;
   if (requestedConversationId) {
@@ -466,6 +561,11 @@ async function resolveConversation(body) {
   }
 
   const brief = getConversationBrief(conversationId);
+  const existingAgents = mapStoredAgents(getConversationAgents(conversationId));
+  if (shouldUpdateAgents) {
+    upsertConversationAgents(conversationId, mergeAgentConfig(existingAgents, requestedAgents));
+  }
+  const agents = mapStoredAgents(getConversationAgents(conversationId));
 
   const transcript = getMessages(conversationId);
   await bootstrapMemoryIfNeeded({
@@ -482,6 +582,7 @@ async function resolveConversation(body) {
     conversationId,
     topic,
     brief,
+    agents,
     transcript,
     turns,
     memory
@@ -508,6 +609,7 @@ async function runConversationBatch({
   conversationId,
   topic,
   brief,
+  agents,
   transcript,
   turns,
   memory,
@@ -532,7 +634,8 @@ async function runConversationBatch({
     }
 
     const nextTurn = transcript.length + 1;
-    const speaker = AGENTS[(nextTurn - 1) % AGENTS.length];
+    const activeAgents = agents && agents.length ? agents : DEFAULT_AGENTS;
+    const speaker = activeAgents[(nextTurn - 1) % activeAgents.length];
     const previous = transcript[transcript.length - 1];
 
     let entry = null;
@@ -678,6 +781,7 @@ app.get("/api/conversation/:id", (req, res) => {
   const transcript = getMessages(conversationId);
   const memory = getCompressedMemory(conversationId);
   const brief = getConversationBrief(conversationId);
+  const agents = mapStoredAgents(getConversationAgents(conversationId));
 
   return res.json({
     conversationId,
@@ -685,6 +789,7 @@ app.get("/api/conversation/:id", (req, res) => {
     parentConversationId: conversation.parentConversationId || null,
     forkFromTurn: Number.isFinite(conversation.forkFromTurn) ? conversation.forkFromTurn : null,
     brief,
+    agents,
     totalTurns: transcript.length,
     transcript,
     memory: memory.stats
@@ -718,6 +823,11 @@ app.post("/api/conversation/:id/fork", async (req, res) => {
 
     const sourceBrief = getConversationBrief(sourceConversationId);
     upsertConversationBrief(forkConversationId, sourceBrief);
+    const sourceStoredAgents = getConversationAgents(sourceConversationId);
+    const sourceAgents = mapStoredAgents(sourceStoredAgents);
+    if (sourceStoredAgents.length > 0) {
+      upsertConversationAgents(forkConversationId, sourceAgents);
+    }
 
     const forkTranscript =
       forkFromTurn > 0
@@ -744,6 +854,7 @@ app.post("/api/conversation/:id/fork", async (req, res) => {
       conversationId: forkConversationId,
       topic: sourceConversation.topic,
       brief: sourceBrief,
+      agents: sourceAgents,
       parentConversationId: sourceConversationId,
       forkFromTurn,
       totalTurns: forkTranscript.length,
@@ -771,6 +882,46 @@ app.get("/api/conversation/:id/brief", (req, res) => {
     conversationId,
     topic: conversation.topic,
     brief: getConversationBrief(conversationId)
+  });
+});
+
+app.get("/api/conversation/:id/agents", (req, res) => {
+  const conversationId = String(req.params.id || "").trim();
+  if (!conversationId) {
+    return res.status(400).json({ error: "Conversation id is required." });
+  }
+
+  const conversation = getConversation(conversationId);
+  if (!conversation) {
+    return res.status(404).json({ error: "Conversation not found." });
+  }
+
+  return res.json({
+    conversationId,
+    topic: conversation.topic,
+    agents: mapStoredAgents(getConversationAgents(conversationId))
+  });
+});
+
+app.post("/api/conversation/:id/agents", (req, res) => {
+  const conversationId = String(req.params.id || "").trim();
+  if (!conversationId) {
+    return res.status(400).json({ error: "Conversation id is required." });
+  }
+
+  const conversation = getConversation(conversationId);
+  if (!conversation) {
+    return res.status(404).json({ error: "Conversation not found." });
+  }
+
+  const currentAgents = mapStoredAgents(getConversationAgents(conversationId));
+  const incomingAgents = parseAgentConfigFromBody(req.body);
+  upsertConversationAgents(conversationId, mergeAgentConfig(currentAgents, incomingAgents));
+
+  return res.json({
+    conversationId,
+    topic: conversation.topic,
+    agents: mapStoredAgents(getConversationAgents(conversationId))
   });
 });
 
@@ -810,10 +961,12 @@ app.get("/api/conversation/:id/memory", (req, res) => {
 
   const memory = getCompressedMemory(conversationId);
   const brief = getConversationBrief(conversationId);
+  const agents = mapStoredAgents(getConversationAgents(conversationId));
   return res.json({
     conversationId,
     topic: conversation.topic,
     brief,
+    agents,
     memory
   });
 });
@@ -832,7 +985,7 @@ app.post("/api/conversation/stream", async (req, res) => {
       return res.status(setup.status).json({ error: setup.error });
     }
 
-    const { conversationId, topic, brief, transcript, turns, memory } = setup;
+    const { conversationId, topic, brief, agents, transcript, turns, memory } = setup;
 
     res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
     res.setHeader("Cache-Control", "no-cache");
@@ -850,6 +1003,7 @@ app.post("/api/conversation/stream", async (req, res) => {
       conversationId,
       topic,
       brief,
+      agents,
       engine: getEngineLabel(),
       memory: memory.stats,
       charter: DISCUSSION_CHARTER,
@@ -870,6 +1024,7 @@ app.post("/api/conversation/stream", async (req, res) => {
       conversationId,
       topic,
       brief,
+      agents,
       transcript,
       turns,
       memory,
@@ -881,6 +1036,7 @@ app.post("/api/conversation/stream", async (req, res) => {
       conversationId,
       topic,
       brief,
+      agents,
       turns: batch.newEntries.length,
       totalTurns: batch.totalTurns,
       stopReason: batch.stopReason,
@@ -906,11 +1062,12 @@ app.post("/api/conversation", async (req, res) => {
       return res.status(setup.status).json({ error: setup.error });
     }
 
-    const { conversationId, topic, brief, transcript, turns, memory } = setup;
+    const { conversationId, topic, brief, agents, transcript, turns, memory } = setup;
     const batch = await runConversationBatch({
       conversationId,
       topic,
       brief,
+      agents,
       transcript,
       turns,
       memory
@@ -920,6 +1077,7 @@ app.post("/api/conversation", async (req, res) => {
       conversationId,
       topic,
       brief,
+      agents,
       turns: batch.newEntries.length,
       totalTurns: batch.totalTurns,
       stopReason: batch.stopReason,
