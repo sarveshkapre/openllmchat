@@ -32,7 +32,30 @@ const port = process.env.PORT || 3000;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-app.use(express.json());
+app.disable("x-powered-by");
+app.use(express.json({ limit: "32kb" }));
+app.use((req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+  res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+  res.setHeader(
+    "Content-Security-Policy",
+    [
+      "default-src 'self'",
+      "script-src 'self'",
+      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+      "font-src 'self' https://fonts.gstatic.com",
+      "img-src 'self' data:",
+      "connect-src 'self'",
+      "base-uri 'self'",
+      "form-action 'self'",
+      "frame-ancestors 'none'"
+    ].join("; ")
+  );
+  next();
+});
 app.use(express.static(path.join(__dirname, "public")));
 
 const DEFAULT_AGENTS = [
@@ -81,6 +104,12 @@ const QUALITY_MIN_WORDS = readIntEnv("QUALITY_MIN_WORDS", 9, 4, 40);
 const QUALITY_RETRY_LIMIT = readIntEnv("QUALITY_RETRY_LIMIT", 1, 0, 3);
 const QUALITY_MAX_SIMILARITY = readFloatEnv("QUALITY_MAX_SIMILARITY", 0.9, 0.6, 0.98);
 const QUALITY_MIN_TOPIC_COVERAGE = readFloatEnv("QUALITY_MIN_TOPIC_COVERAGE", 0.12, 0.02, 0.8);
+const RATE_LIMIT_WINDOW_MS = readIntEnv("RATE_LIMIT_WINDOW_MS", 60000, 1000, 3600000);
+const RATE_LIMIT_MAX_REQUESTS = readIntEnv("RATE_LIMIT_MAX_REQUESTS", 180, 20, 5000);
+const GENERATION_LIMIT_MAX_REQUESTS = readIntEnv("GENERATION_LIMIT_MAX_REQUESTS", 36, 2, 500);
+
+const apiRateState = new Map();
+const generationRateState = new Map();
 
 const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
 const hasOpenAI = Boolean(process.env.OPENAI_API_KEY);
@@ -93,6 +122,85 @@ const client = hasOpenAI
 
 function getEngineLabel() {
   return hasOpenAI ? `OpenAI (${model})` : "Local fallback generator";
+}
+
+function getClientKey(req) {
+  const forwarded = String(req.headers["x-forwarded-for"] || "")
+    .split(",")[0]
+    .trim();
+  const ip = forwarded || req.ip || req.socket?.remoteAddress || "unknown";
+  return String(ip);
+}
+
+function applyRateLimit(req, res, next, stateMap, maxRequests, windowMs) {
+  const key = getClientKey(req);
+  const now = Date.now();
+  const existing = stateMap.get(key);
+
+  if (!existing || existing.resetAt <= now) {
+    stateMap.set(key, {
+      count: 1,
+      resetAt: now + windowMs
+    });
+    return next();
+  }
+
+  existing.count += 1;
+  stateMap.set(key, existing);
+
+  if (existing.count <= maxRequests) {
+    return next();
+  }
+
+  const retryAfterSeconds = Math.max(1, Math.ceil((existing.resetAt - now) / 1000));
+  res.setHeader("Retry-After", String(retryAfterSeconds));
+  return res.status(429).json({
+    error: "Rate limit exceeded. Slow down and try again shortly.",
+    retryAfterSeconds
+  });
+}
+
+app.use("/api", (req, res, next) =>
+  applyRateLimit(req, res, next, apiRateState, RATE_LIMIT_MAX_REQUESTS, RATE_LIMIT_WINDOW_MS)
+);
+
+app.use("/api", (req, res, next) => {
+  if (req.method !== "POST") {
+    return next();
+  }
+
+  if (!["/conversation", "/conversation/stream"].includes(req.path)) {
+    return next();
+  }
+
+  return applyRateLimit(
+    req,
+    res,
+    next,
+    generationRateState,
+    GENERATION_LIMIT_MAX_REQUESTS,
+    RATE_LIMIT_WINDOW_MS
+  );
+});
+
+function sanitizeTopic(value) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 220);
+}
+
+function sanitizeConversationId(value) {
+  const id = String(value || "").trim();
+  if (!id || id.length > 80) {
+    return "";
+  }
+
+  if (!/^[a-zA-Z0-9-]+$/.test(id)) {
+    return "";
+  }
+
+  return id;
 }
 
 function normalizeText(text) {
@@ -585,8 +693,8 @@ async function runModerator({ topic, transcript, memory, currentDirective, brief
 
 async function resolveConversation(body) {
   const turns = parseTurns(body?.turns);
-  const requestedTopic = String(body?.topic || "").trim();
-  const requestedConversationId = String(body?.conversationId || "").trim();
+  const requestedTopic = sanitizeTopic(body?.topic);
+  const requestedConversationId = sanitizeConversationId(body?.conversationId);
   const requestedBrief = parseBriefFromBody(body);
   const requestedAgents = parseAgentConfigFromBody(body);
   const requestedMeta = parseConversationMetaFromBody(body);
@@ -841,7 +949,7 @@ async function runConversationBatch({
 }
 
 app.get("/api/conversation/:id", (req, res) => {
-  const conversationId = String(req.params.id || "").trim();
+  const conversationId = sanitizeConversationId(req.params.id);
   if (!conversationId) {
     return res.status(400).json({ error: "Conversation id is required." });
   }
@@ -873,7 +981,7 @@ app.get("/api/conversation/:id", (req, res) => {
 
 app.post("/api/conversation/:id/fork", async (req, res) => {
   try {
-    const sourceConversationId = String(req.params.id || "").trim();
+    const sourceConversationId = sanitizeConversationId(req.params.id);
     if (!sourceConversationId) {
       return res.status(400).json({ error: "Conversation id is required." });
     }
@@ -952,7 +1060,7 @@ app.post("/api/conversation/:id/fork", async (req, res) => {
 });
 
 app.get("/api/conversation/:id/brief", (req, res) => {
-  const conversationId = String(req.params.id || "").trim();
+  const conversationId = sanitizeConversationId(req.params.id);
   if (!conversationId) {
     return res.status(400).json({ error: "Conversation id is required." });
   }
@@ -972,7 +1080,7 @@ app.get("/api/conversation/:id/brief", (req, res) => {
 });
 
 app.get("/api/conversation/:id/agents", (req, res) => {
-  const conversationId = String(req.params.id || "").trim();
+  const conversationId = sanitizeConversationId(req.params.id);
   if (!conversationId) {
     return res.status(400).json({ error: "Conversation id is required." });
   }
@@ -992,7 +1100,7 @@ app.get("/api/conversation/:id/agents", (req, res) => {
 });
 
 app.post("/api/conversation/:id/agents", (req, res) => {
-  const conversationId = String(req.params.id || "").trim();
+  const conversationId = sanitizeConversationId(req.params.id);
   if (!conversationId) {
     return res.status(400).json({ error: "Conversation id is required." });
   }
@@ -1016,7 +1124,7 @@ app.post("/api/conversation/:id/agents", (req, res) => {
 });
 
 app.post("/api/conversation/:id/meta", (req, res) => {
-  const conversationId = String(req.params.id || "").trim();
+  const conversationId = sanitizeConversationId(req.params.id);
   if (!conversationId) {
     return res.status(400).json({ error: "Conversation id is required." });
   }
@@ -1040,7 +1148,7 @@ app.post("/api/conversation/:id/meta", (req, res) => {
 });
 
 app.post("/api/conversation/:id/brief", (req, res) => {
-  const conversationId = String(req.params.id || "").trim();
+  const conversationId = sanitizeConversationId(req.params.id);
   if (!conversationId) {
     return res.status(400).json({ error: "Conversation id is required." });
   }
@@ -1065,7 +1173,7 @@ app.post("/api/conversation/:id/brief", (req, res) => {
 });
 
 app.get("/api/conversation/:id/memory", (req, res) => {
-  const conversationId = String(req.params.id || "").trim();
+  const conversationId = sanitizeConversationId(req.params.id);
   if (!conversationId) {
     return res.status(400).json({ error: "Conversation id is required." });
   }

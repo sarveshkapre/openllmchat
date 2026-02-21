@@ -38,6 +38,10 @@ Modern web app where two AI agents discuss a user topic in 10-turn batches while
 - Memory Inspector panel to audit high-value tokens, semantic memory items, and rolling summaries per thread
 - One-click transcript export (copy markdown or download file)
 - Sleek responsive UI with animated transcript rendering
+- Security hardening:
+  - Request rate limiting for API and generation endpoints
+  - Strict conversation id validation
+  - Security headers + CSP defaults
 - Works with OpenAI API or local fallback mode when no API key is set
 
 ## Quick start
@@ -70,6 +74,9 @@ Open `http://localhost:3000`.
 - `QUALITY_RETRY_LIMIT`: retries per turn when quality checks fail (default `1`)
 - `QUALITY_MAX_SIMILARITY`: max similarity to previous turn before retry (default `0.9`)
 - `QUALITY_MIN_TOPIC_COVERAGE`: minimum keyword overlap score before retry (default `0.12`)
+- `RATE_LIMIT_WINDOW_MS`: API rate limit window in milliseconds (default `60000`)
+- `RATE_LIMIT_MAX_REQUESTS`: max API requests per client IP per window (default `180`)
+- `GENERATION_LIMIT_MAX_REQUESTS`: max conversation generation POST requests per IP per window (default `36`)
 - `PORT`: server port (default `3000`)
 
 ## API
