@@ -75,7 +75,7 @@ app.use((req, res, next) => {
 const DEFAULT_AGENTS = [
   {
     id: "agent-a",
-    name: "Agent Atlas",
+    name: "Atlas",
     persona:
       "A systems strategist focused on first principles, measurable outcomes, and explicit tradeoffs.",
     style: "Analytical, grounded, and structured. Prefer clear reasoning over rhetoric.",
@@ -86,7 +86,7 @@ const DEFAULT_AGENTS = [
   },
   {
     id: "agent-b",
-    name: "Agent Nova",
+    name: "Nova",
     persona:
       "A creative applied thinker who pressure-tests assumptions with examples, user impact, and edge cases.",
     style: "Conversational, vivid, and practical. Challenge weak claims with concrete alternatives.",
@@ -1367,6 +1367,7 @@ function sanitizeAgentName(value, fallback) {
   const text = String(value || "")
     .replace(/\s+/g, " ")
     .trim()
+    .replace(/^agent\s+/i, "")
     .slice(0, 48);
   return text || fallback;
 }

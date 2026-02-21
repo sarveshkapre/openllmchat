@@ -37,6 +37,12 @@ function formatUpdatedAt(value) {
   });
 }
 
+function formatSpeakerLabel(value) {
+  return String(value || "Agent")
+    .replace(/^agent\s+/i, "")
+    .trim() || "Agent";
+}
+
 function upsertMessageByTurn(messages, entry) {
   if (!entry || typeof entry !== "object") {
     return messages;
@@ -527,7 +533,7 @@ export default function HomePage() {
                     {messages.map((entry, index) => (
                       <li key={`${entry.turn}-${index}`} className="rounded-md border bg-muted/30 px-4 py-3">
                         <div className="mb-2 flex items-center justify-between gap-3">
-                          <p className="text-sm font-semibold">{entry.speaker || "Agent"}</p>
+                          <p className="text-sm font-semibold">{formatSpeakerLabel(entry.speaker)}</p>
                           <p className="font-mono text-xs text-muted-foreground">
                             Turn {Number(entry.turn || index + 1)}
                           </p>
