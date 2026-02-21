@@ -179,6 +179,8 @@ export default function HomePage() {
   const [totalTurns, setTotalTurns] = useState(0);
 
   const [isRunning, setIsRunning] = useState(false);
+  const [runRequestedTurns, setRunRequestedTurns] = useState(0);
+  const [runGeneratedTurns, setRunGeneratedTurns] = useState(0);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyClearing, setHistoryClearing] = useState(false);
 
@@ -373,6 +375,8 @@ export default function HomePage() {
 
     const turns = parseTurns(turnsInput);
     setTurnsInput(String(turns));
+    setRunRequestedTurns(turns);
+    setRunGeneratedTurns(0);
 
     let conversationId = activeConversationId;
     if (activeTopic && cleanTopic !== activeTopic) {
@@ -488,6 +492,7 @@ export default function HomePage() {
           if (!completedTurns.has(completedTurn)) {
             completedTurns.add(completedTurn);
             generatedTurns += 1;
+            setRunGeneratedTurns(generatedTurns);
           }
           setMessages((previous) => upsertMessageByTurn(previous, chunk.entry));
           scheduleScrollToBottom();
@@ -538,6 +543,8 @@ export default function HomePage() {
       }
     } finally {
       setIsRunning(false);
+      setRunRequestedTurns(0);
+      setRunGeneratedTurns(0);
       abortRef.current = null;
     }
   }, [
@@ -700,7 +707,12 @@ export default function HomePage() {
                 {topic.trim() || "Two-agent conversation"}
               </p>
               <p className="text-xs text-muted-foreground">
-                {agentAPreset.label} ↔ {agentBPreset.label} · {totalTurns} turns
+                {agentAPreset.label} ↔ {agentBPreset.label}
+                {isRunning
+                  ? ` · Generating ${Math.min(runGeneratedTurns, runRequestedTurns)}/${Math.max(1, runRequestedTurns || parseTurns(turnsInput))} turns`
+                  : totalTurns > 0
+                    ? ` · Thread has ${totalTurns} turns`
+                    : ""}
               </p>
             </div>
             <div className="flex items-center gap-2">

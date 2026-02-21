@@ -162,7 +162,9 @@ function normalizeOrigin(origin) {
 }
 
 const MODERATOR_INTERVAL = readIntEnv("MODERATOR_INTERVAL", 6, 2, 20);
-const MAX_GENERATION_MS = readIntEnv("MAX_GENERATION_MS", 30000, 3000, 120000);
+// Total time budget for a multi-turn run. Default increased because modern models + retrieval can exceed 30s
+// for a 10-turn batch, which prematurely stops runs (e.g. at ~4 turns) and confuses users.
+const MAX_GENERATION_MS = readIntEnv("MAX_GENERATION_MS", 180000, 3000, 600000);
 const MAX_REPETITION_STREAK = readIntEnv("MAX_REPETITION_STREAK", 2, 1, 5);
 const QUALITY_MIN_WORDS = readIntEnv("QUALITY_MIN_WORDS", 9, 4, 40);
 const QUALITY_RETRY_LIMIT = readIntEnv("QUALITY_RETRY_LIMIT", 1, 0, 3);
