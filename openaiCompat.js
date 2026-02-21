@@ -59,6 +59,7 @@ async function createChatCompletionWithFallback({
   messages,
   temperature,
   reasoningEffort,
+  abortSignal,
   onEvent
 }) {
   const primaryModel = String(model || "").trim();
@@ -104,7 +105,10 @@ async function createChatCompletionWithFallback({
 
       while (true) {
         try {
-          const completion = await client.chat.completions.create(finalPayload);
+          const completion = await client.chat.completions.create(
+            finalPayload,
+            abortSignal ? { signal: abortSignal } : undefined
+          );
           if (typeof onEvent === "function") {
             onEvent("model.request.success", {
               model: candidate,

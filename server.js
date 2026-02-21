@@ -263,6 +263,44 @@ function serializeError(error) {
   });
 }
 
+function isAbortError(error) {
+  const name = String(error?.name || "").toLowerCase();
+  const code = String(error?.code || "").toLowerCase();
+  const message = String(error?.message || "").toLowerCase();
+  return (
+    name === "aborterror" ||
+    code === "abort_err" ||
+    message.includes("aborted") ||
+    message.includes("abort")
+  );
+}
+
+function createCancellationController(defaultReason = "cancelled") {
+  const controller = new AbortController();
+  let reason = String(defaultReason || "cancelled");
+
+  return {
+    signal: controller.signal,
+    isCancelled() {
+      return controller.signal.aborted;
+    },
+    reason() {
+      return reason;
+    },
+    cancel(nextReason = defaultReason) {
+      reason = String(nextReason || defaultReason || "cancelled");
+      if (controller.signal.aborted) {
+        return;
+      }
+      try {
+        controller.abort(new Error(reason));
+      } catch {
+        controller.abort();
+      }
+    }
+  };
+}
+
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
@@ -1381,8 +1419,13 @@ async function generateTurn({
   brief,
   mode,
   references,
-  requestId
+  requestId,
+  cancellation
 }) {
+  if (cancellation?.isCancelled?.()) {
+    return null;
+  }
+
   if (!client) {
     return localTurn(topic, speaker, transcript, moderatorDirective, brief, mode, references);
   }
@@ -1416,6 +1459,7 @@ async function generateTurn({
       fallbackModel,
       reasoningEffort,
       temperature: speaker.temperature,
+      abortSignal: cancellation?.signal,
       onEvent: LOG_MODEL_EVENTS
         ? (event, fields) =>
             logEvent("debug", event, {
@@ -1467,6 +1511,9 @@ async function generateTurn({
       localTurn(topic, speaker, transcript, moderatorDirective, brief, mode, references)
     );
   } catch (error) {
+    if (cancellation?.isCancelled?.() || isAbortError(error)) {
+      return null;
+    }
     logError("warn", "model.turn.fallback", error, {
       requestId,
       speaker: speaker?.name,
@@ -2101,7 +2148,11 @@ function localModeratorAssessment({ topic, transcript, brief, mode }) {
   };
 }
 
-async function runModerator({ topic, transcript, memory, currentDirective, brief, mode, requestId }) {
+async function runModerator({ topic, transcript, memory, currentDirective, brief, mode, requestId, cancellation }) {
+  if (cancellation?.isCancelled?.()) {
+    return null;
+  }
+
   if (transcript.length < 2) {
     return {
       onTopic: true,
@@ -2133,6 +2184,7 @@ async function runModerator({ topic, transcript, memory, currentDirective, brief
       fallbackModel,
       reasoningEffort,
       temperature: 0,
+      abortSignal: cancellation?.signal,
       onEvent: LOG_MODEL_EVENTS
         ? (event, fields) =>
             logEvent("debug", event, {
@@ -2188,6 +2240,9 @@ async function runModerator({ topic, transcript, memory, currentDirective, brief
       directive: String(parsed.directive || "Stay on-topic and add one concrete next step.").slice(0, 280)
     };
   } catch (error) {
+    if (cancellation?.isCancelled?.() || isAbortError(error)) {
+      return null;
+    }
     logError("warn", "moderator.fallback", error, { requestId, mode });
     return localModeratorAssessment({ topic, transcript, brief, mode });
   }
@@ -2351,8 +2406,11 @@ async function runConversationBatch({
   memory,
   references = [],
   writeChunk,
-  requestId
+  requestId,
+  cancellation
 }) {
+  const isCancelled = () => Boolean(cancellation?.isCancelled?.());
+  const cancelledReason = () => String(cancellation?.reason?.() || "client_abort");
   const newEntries = [];
   const startedAt = Date.now();
   const qualityKeywordSet = getQualityKeywordSet(topic, brief);
@@ -2393,6 +2451,18 @@ async function runConversationBatch({
   }
 
   for (let i = 0; i < turns; i += 1) {
+    if (isCancelled()) {
+      stopReason = cancelledReason();
+      logEvent("info", "conversation.batch.stop", {
+        requestId,
+        conversationId,
+        reason: stopReason,
+        elapsedMs: Date.now() - startedAt,
+        addedTurns: newEntries.length
+      });
+      break;
+    }
+
     if (Date.now() - startedAt > MAX_GENERATION_MS) {
       stopReason = "time_limit";
       logEvent("warn", "conversation.batch.stop", {
@@ -2421,6 +2491,10 @@ async function runConversationBatch({
       (citationMode || speakerCanSearch) &&
       (i === 0 || i % referenceRefreshInterval === 0 || activeReferences.length === 0)
     ) {
+      if (isCancelled()) {
+        stopReason = cancelledReason();
+        break;
+      }
       try {
         const retrieved = citationMode
           ? await retrieveDebateReferences({
@@ -2489,6 +2563,11 @@ async function runConversationBatch({
     }
 
     while (attempts <= maxAttempts) {
+      if (isCancelled()) {
+        stopReason = cancelledReason();
+        break;
+      }
+
       const attemptDirective =
         attempts === 0
           ? moderatorDirective
@@ -2509,8 +2588,14 @@ async function runConversationBatch({
         moderatorDirective: attemptDirective,
         brief,
         references: activeReferences,
-        requestId
+        requestId,
+        cancellation
       });
+
+      if (generated === null) {
+        stopReason = cancelledReason();
+        break;
+      }
 
       signaledDone = containsDoneToken(generated);
       const text = stripDonePrefix(generated);
@@ -2578,6 +2663,21 @@ async function runConversationBatch({
       }
     }
 
+    if (!entry && stopReason === cancelledReason()) {
+      break;
+    }
+
+    if (!entry) {
+      stopReason = stopReason === "max_turns" ? "generation_failed" : stopReason;
+      logEvent("warn", "conversation.batch.stop", {
+        requestId,
+        conversationId,
+        reason: stopReason,
+        turn: nextTurn
+      });
+      break;
+    }
+
     qualityScoreTotal += quality?.score ?? 0;
     qualityTurns += 1;
     retriesUsed += Math.max(0, attempts - 1);
@@ -2593,6 +2693,11 @@ async function runConversationBatch({
 
     if (citationMode && evaluator?.citationCount > 0) {
       citationTurnCount += 1;
+    }
+
+    if (isCancelled()) {
+      stopReason = cancelledReason();
+      break;
     }
 
     const turnCitations = extractCitedClaims({
@@ -2681,8 +2786,14 @@ async function runConversationBatch({
         transcript,
         memory,
         currentDirective: moderatorDirective,
-        requestId
+        requestId,
+        cancellation
       });
+
+      if (moderation === null) {
+        stopReason = cancelledReason();
+        break;
+      }
 
       moderatorDirective = moderation.directive || moderatorDirective;
 
@@ -3224,6 +3335,19 @@ app.post("/api/conversation/lab", async (req, res) => {
 
 app.post("/api/conversation/stream", async (req, res) => {
   const requestId = getRequestId(req);
+  const cancellation = createCancellationController("client_abort");
+  const onClientDisconnect = () => {
+    const alreadyCancelled = cancellation.isCancelled();
+    cancellation.cancel("client_abort");
+    if (!alreadyCancelled && LOG_CONVERSATION_EVENTS) {
+      logEvent("info", "conversation.stream.client_disconnected", {
+        requestId
+      });
+    }
+  };
+  req.once("aborted", onClientDisconnect);
+  req.once("close", onClientDisconnect);
+  res.once("close", onClientDisconnect);
   try {
     const setup = await resolveConversation(req.body);
     if (setup.error) {
@@ -3255,6 +3379,9 @@ app.post("/api/conversation/stream", async (req, res) => {
     }
 
     const writeChunk = (payload) => {
+      if (cancellation.isCancelled() || res.writableEnded || res.destroyed) {
+        return;
+      }
       res.write(`${JSON.stringify(payload)}\n`);
       if (LOG_STREAM_CHUNKS) {
         logEvent("debug", "conversation.stream.chunk", {
@@ -3327,25 +3454,28 @@ app.post("/api/conversation/stream", async (req, res) => {
       turns,
       memory,
       writeChunk,
-      requestId
+      requestId,
+      cancellation
     });
 
-    writeChunk({
-      type: "done",
-      conversationId,
-      topic,
-      title,
-      starred,
-      mode,
-      brief,
-      agents,
-      turns: batch.newEntries.length,
-      totalTurns: batch.totalTurns,
-      stopReason: batch.stopReason,
-      memory: batch.memoryStats,
-      quality: batch.qualitySummary,
-      references: batch.references
-    });
+    if (!cancellation.isCancelled()) {
+      writeChunk({
+        type: "done",
+        conversationId,
+        topic,
+        title,
+        starred,
+        mode,
+        brief,
+        agents,
+        turns: batch.newEntries.length,
+        totalTurns: batch.totalTurns,
+        stopReason: batch.stopReason,
+        memory: batch.memoryStats,
+        quality: batch.qualitySummary,
+        references: batch.references
+      });
+    }
     if (LOG_CONVERSATION_EVENTS) {
       logEvent(batch.stopReason === "max_turns" ? "info" : "warn", "conversation.stream.complete", {
         requestId,
@@ -3355,8 +3485,16 @@ app.post("/api/conversation/stream", async (req, res) => {
         stopReason: batch.stopReason
       });
     }
-    res.end();
+    if (!res.writableEnded && !res.destroyed) {
+      res.end();
+    }
   } catch (error) {
+    if (cancellation.isCancelled() || isAbortError(error)) {
+      if (!res.writableEnded && !res.destroyed) {
+        res.end();
+      }
+      return;
+    }
     logError("error", "conversation.stream.failed", error, { requestId });
     if (res.headersSent) {
       res.write(`${JSON.stringify({ type: "error", error: "Failed to generate conversation." })}\n`);
