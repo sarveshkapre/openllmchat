@@ -1298,7 +1298,8 @@ function turnTakingContextBlock(topic, transcript) {
       "Turn-taking context:",
       `Original topic/question: ${topic}`,
       "No prior agent reply exists yet.",
-      "You are the opening speaker: give your first opinion on the topic."
+      "You are the opening speaker (Agent A, Turn 1).",
+      "In your first sentence, directly address the user's exact question before adding any extra framing."
     ].join("\n");
   }
 
@@ -1308,6 +1309,19 @@ function turnTakingContextBlock(topic, transcript) {
     `Previous speaker: ${previous.speaker}`,
     `Previous reply: ${previous.text}`,
     "Respond directly to the previous reply first, then add one new relevant point."
+  ].join("\n");
+}
+
+function openingQuestionBlock(topic, transcript) {
+  if ((transcript || []).length > 0) {
+    return "";
+  }
+
+  return [
+    "Opening-turn requirement:",
+    `User prompt/question (exact): "${topic}"`,
+    "You are producing Turn 1 as Agent A.",
+    "Sentence 1 must respond directly to that exact prompt/question."
   ].join("\n");
 }
 
@@ -1374,7 +1388,8 @@ function localTurn(topic, speaker, transcript, moderatorDirective, brief, mode =
     };
     const openers = openersByArchetype[archetype] || openersByArchetype.nova;
     const line = openers[transcript.length % openers.length];
-    return objectiveHint ? `${line} A useful constraint is: ${objectiveHint}.` : line;
+    const openingLead = `User asked: "${compactLine(topic, 140)}".`;
+    return objectiveHint ? `${openingLead} ${line} A useful constraint is: ${objectiveHint}.` : `${openingLead} ${line}`;
   }
 
   const responsesByArchetype = {
@@ -1448,9 +1463,16 @@ async function generateTurn({
     partner
   });
   const turnTakingPrompt = turnTakingContextBlock(topic, transcript);
-  const userPrompt = [roomContextPrompt, basePrompt, turnTakingPrompt, buildReferenceBlock(references, mode)].join(
-    "\n\n"
-  );
+  const openingPrompt = openingQuestionBlock(topic, transcript);
+  const userPrompt = [
+    roomContextPrompt,
+    openingPrompt,
+    basePrompt,
+    turnTakingPrompt,
+    buildReferenceBlock(references, mode)
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 
   try {
     const result = await createChatCompletionWithFallback({
@@ -1481,6 +1503,7 @@ async function generateTurn({
             DISCOVERY_MODE_HINTS[mode] || DISCOVERY_MODE_HINTS.exploration,
             "Maintain continuity and avoid topic drift.",
             "Turn-taking rule: respond to the previous agent reply before introducing your new point.",
+            "Opening-turn rule: when no previous reply exists, directly answer the user's exact prompt/question in sentence one.",
             "When a previous reply exists, directly address it in your first sentence.",
             "Write 3-5 dense conversational sentences in plain language, without bullets.",
             "Sound like a thoughtful colleague, not a formal report writer.",
