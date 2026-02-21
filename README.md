@@ -18,8 +18,9 @@ Modern web app where two AI agents discuss a user topic in 10-turn batches while
   - Repetition guard and optional DONE-token stopping
 - Quality optimizer:
   - Scores each turn for topic coverage, verbosity, and repetition
-  - Auto-retries weak turns with stricter guidance
-  - Exposes quality score and retries in stream/UI
+  - Continuous evaluator loop for novelty, coherence, non-repetition, and evidence quality
+  - Auto-retries weak turns with stricter self-correction directives
+  - Exposes quality + evaluator scores and retries in stream/UI
 - Conversation Brief per thread:
   - Objective
   - Constraints
@@ -97,6 +98,12 @@ Open `http://localhost:3000`.
 - `QUALITY_RETRY_LIMIT`: retries per turn when quality checks fail (default `1`)
 - `QUALITY_MAX_SIMILARITY`: max similarity to previous turn before retry (default `0.9`)
 - `QUALITY_MIN_TOPIC_COVERAGE`: minimum keyword overlap score before retry (default `0.12`)
+- `EVALUATOR_LOOP_ENABLED`: enable continuous evaluator loop (default `true`)
+- `EVALUATOR_RETRY_LIMIT`: extra retries for evaluator-driven self-correction (default `1`)
+- `EVALUATOR_MIN_OVERALL`: minimum evaluator composite score (default `0.56`)
+- `EVALUATOR_MIN_NOVELTY`: minimum novelty score per turn (default `0.22`)
+- `EVALUATOR_MIN_COHERENCE`: minimum coherence score per turn (default `0.26`)
+- `EVALUATOR_MIN_EVIDENCE`: minimum evidence quality score in debate mode (default `0.24`)
 - `MAX_TURN_CHARS`: max characters stored per generated turn after normalization (default `1400`)
 - `RATE_LIMIT_WINDOW_MS`: API rate limit window in milliseconds (default `60000`)
 - `RATE_LIMIT_MAX_REQUESTS`: max API requests per client IP per window (default `180`)

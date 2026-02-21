@@ -915,8 +915,9 @@ function setQualityChip(quality) {
   }
 
   const score = Number(qualityState.avgScore || 0);
+  const evaluatorScore = Number(qualityState.evaluatorAvgScore || 0);
   const retries = Number(qualityState.retriesUsed || 0);
-  qualityChipEl.textContent = `Quality: ${(score * 100).toFixed(0)} • retries ${retries}`;
+  qualityChipEl.textContent = `Quality: ${(score * 100).toFixed(0)} • eval ${(evaluatorScore * 100).toFixed(0)} • retries ${retries}`;
 }
 
 function setConversationState(conversationId, topic) {
@@ -1072,10 +1073,16 @@ function appendMessage(entry, animate = true) {
     tries.className = "quality-pill";
     tries.textContent = `tries ${quality.attempts || 1}`;
 
+    const evaluatorOverall = Number(quality?.evaluator?.overall || 0);
+    const evaluator = document.createElement("span");
+    evaluator.className = "quality-pill";
+    evaluator.textContent = `eval ${(evaluatorOverall * 100).toFixed(0)}`;
+
     qualityRow.appendChild(score);
     qualityRow.appendChild(words);
     qualityRow.appendChild(sim);
     qualityRow.appendChild(tries);
+    qualityRow.appendChild(evaluator);
     item.appendChild(qualityRow);
   }
 

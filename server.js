@@ -129,6 +129,12 @@ const QUALITY_MIN_WORDS = readIntEnv("QUALITY_MIN_WORDS", 9, 4, 40);
 const QUALITY_RETRY_LIMIT = readIntEnv("QUALITY_RETRY_LIMIT", 1, 0, 3);
 const QUALITY_MAX_SIMILARITY = readFloatEnv("QUALITY_MAX_SIMILARITY", 0.9, 0.6, 0.98);
 const QUALITY_MIN_TOPIC_COVERAGE = readFloatEnv("QUALITY_MIN_TOPIC_COVERAGE", 0.12, 0.02, 0.8);
+const EVALUATOR_LOOP_ENABLED = readBoolEnv("EVALUATOR_LOOP_ENABLED", true);
+const EVALUATOR_RETRY_LIMIT = readIntEnv("EVALUATOR_RETRY_LIMIT", 1, 0, 3);
+const EVALUATOR_MIN_OVERALL = readFloatEnv("EVALUATOR_MIN_OVERALL", 0.56, 0.2, 0.9);
+const EVALUATOR_MIN_NOVELTY = readFloatEnv("EVALUATOR_MIN_NOVELTY", 0.22, 0.05, 0.9);
+const EVALUATOR_MIN_COHERENCE = readFloatEnv("EVALUATOR_MIN_COHERENCE", 0.26, 0.05, 0.95);
+const EVALUATOR_MIN_EVIDENCE = readFloatEnv("EVALUATOR_MIN_EVIDENCE", 0.24, 0.05, 0.95);
 const MAX_TURN_CHARS = readIntEnv("MAX_TURN_CHARS", 1400, 300, 8000);
 const RATE_LIMIT_WINDOW_MS = readIntEnv("RATE_LIMIT_WINDOW_MS", 60000, 1000, 3600000);
 const RATE_LIMIT_MAX_REQUESTS = readIntEnv("RATE_LIMIT_MAX_REQUESTS", 180, 20, 5000);
@@ -370,6 +376,36 @@ function wordCount(text) {
   return normalizeText(text).split(" ").filter(Boolean).length;
 }
 
+function sentenceCount(text) {
+  return String(text || "")
+    .split(/(?<=[.!?])\s+/)
+    .map((line) => line.trim())
+    .filter(Boolean).length;
+}
+
+function claimLikeSentenceCount(text) {
+  const sentences = String(text || "")
+    .split(/(?<=[.!?])\s+/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (!sentences.length) {
+    return 0;
+  }
+
+  return sentences.filter((sentence) => {
+    if (sentence.length < 24) {
+      return false;
+    }
+    const lower = sentence.toLowerCase();
+    return /\b(is|are|was|were|has|have|shows|indicates|proves|demonstrates|according)\b/.test(lower);
+  }).length;
+}
+
+function extractCitationIds(text) {
+  const matches = String(text || "").match(/\[(R\d+)\]/gi) || [];
+  return [...new Set(matches.map((item) => item.toUpperCase()))];
+}
+
 function getQualityKeywordSet(topic, brief) {
   const source = [topic, brief?.objective, brief?.constraintsText, brief?.doneCriteria]
     .filter(Boolean)
@@ -425,6 +461,114 @@ function evaluateTurnQuality({ text, previousText, keywordSet }) {
     repetitive,
     offTopic,
     accepted: !tooShort && !repetitive && !offTopic
+  };
+}
+
+function evaluateEvidenceQuality({ text, mode, referenceMap }) {
+  if (mode !== "debate") {
+    return {
+      score: 1,
+      citationCount: 0,
+      claimSentences: claimLikeSentenceCount(text),
+      citedReferenceCount: 0
+    };
+  }
+
+  const citations = extractCitationIds(text);
+  const claimSentences = claimLikeSentenceCount(text);
+  let confidenceSum = 0;
+  let confidenceCount = 0;
+
+  for (const citationId of citations) {
+    const reference = referenceMap?.get(citationId);
+    if (!reference) {
+      continue;
+    }
+    confidenceSum += Number(reference.confidence || 0);
+    confidenceCount += 1;
+  }
+
+  const citationCoverage =
+    claimSentences > 0 ? Math.min(1, citations.length / claimSentences) : citations.length > 0 ? 0.65 : 0;
+  const sourceConfidence = confidenceCount > 0 ? confidenceSum / confidenceCount : 0;
+  const score = clamp(citationCoverage * 0.62 + sourceConfidence * 0.38, 0, 1);
+
+  return {
+    score: Number(score.toFixed(4)),
+    citationCount: citations.length,
+    claimSentences,
+    citedReferenceCount: confidenceCount
+  };
+}
+
+function chooseCorrectionDirective({ novelty, coherence, nonRepetition, evidenceQuality, mode }) {
+  const metrics = [
+    { key: "novelty", value: novelty },
+    { key: "coherence", value: coherence },
+    { key: "non_repetition", value: nonRepetition },
+    { key: "evidence_quality", value: evidenceQuality }
+  ].sort((a, b) => a.value - b.value);
+  const weakest = metrics[0]?.key || "coherence";
+
+  if (weakest === "novelty") {
+    return "Add one genuinely new angle, test, or counterfactual not present in recent turns.";
+  }
+
+  if (weakest === "non_repetition") {
+    return "Avoid repeating prior wording; introduce one distinct claim and one concrete implication.";
+  }
+
+  if (weakest === "evidence_quality") {
+    return mode === "debate"
+      ? "Back factual claims with [R#] citations and state uncertainty when evidence is weak."
+      : "Support assertions with concrete rationale rather than generic statements.";
+  }
+
+  return "Maintain coherence by directly building on the previous claim while advancing the topic.";
+}
+
+function evaluateTurnSignals({ text, previousText, recentTranscript, keywordSet, mode, referenceMap }) {
+  const topicCoverage = topicCoverageScore(text, keywordSet);
+  const recent = (recentTranscript || []).slice(-3);
+  const maxRecentSimilarity = recent.length
+    ? Math.max(...recent.map((entry) => jaccardSimilarity(entry?.text, text)))
+    : 0;
+  const novelty = Number(clamp(1 - maxRecentSimilarity, 0, 1).toFixed(4));
+  const previousSimilarity = previousText ? jaccardSimilarity(previousText, text) : 0;
+  const coherence = Number(
+    clamp(topicCoverage * 0.62 + Math.min(1, previousSimilarity / 0.36) * 0.38, 0, 1).toFixed(4)
+  );
+  const nonRepetition = Number(clamp(1 - previousSimilarity, 0, 1).toFixed(4));
+  const evidence = evaluateEvidenceQuality({ text, mode, referenceMap });
+  const evidenceQuality = Number(clamp(evidence.score, 0, 1).toFixed(4));
+
+  const overall = Number(
+    clamp(novelty * 0.28 + coherence * 0.32 + nonRepetition * 0.2 + evidenceQuality * 0.2, 0, 1).toFixed(4)
+  );
+
+  const accepted =
+    overall >= EVALUATOR_MIN_OVERALL &&
+    novelty >= EVALUATOR_MIN_NOVELTY &&
+    coherence >= EVALUATOR_MIN_COHERENCE &&
+    (mode !== "debate" || evidenceQuality >= EVALUATOR_MIN_EVIDENCE);
+
+  return {
+    novelty,
+    coherence,
+    nonRepetition,
+    evidenceQuality,
+    overall,
+    claimSentences: evidence.claimSentences,
+    citationCount: evidence.citationCount,
+    citedReferenceCount: evidence.citedReferenceCount,
+    accepted,
+    correctionDirective: chooseCorrectionDirective({
+      novelty,
+      coherence,
+      nonRepetition,
+      evidenceQuality,
+      mode
+    })
   };
 }
 
@@ -1319,11 +1463,17 @@ async function runConversationBatch({
   transcript,
   turns,
   memory,
+  references = [],
   writeChunk
 }) {
   const newEntries = [];
   const startedAt = Date.now();
   const qualityKeywordSet = getQualityKeywordSet(topic, brief);
+  const referenceMap = new Map(
+    (references || [])
+      .filter((item) => item?.id)
+      .map((item) => [String(item.id).toUpperCase(), item])
+  );
   const modeDefaultDirective =
     mode === "debate"
       ? "Debate the strongest opposing positions and expose the crux."
@@ -1338,6 +1488,9 @@ async function runConversationBatch({
   let retriesUsed = 0;
   let qualityScoreTotal = 0;
   let qualityTurns = 0;
+  let evaluatorScoreTotal = 0;
+  let evaluatorTurns = 0;
+  let evaluatorRetries = 0;
 
   for (let i = 0; i < turns; i += 1) {
     if (Date.now() - startedAt > MAX_GENERATION_MS) {
@@ -1353,14 +1506,22 @@ async function runConversationBatch({
     let entry = null;
     let signaledDone = false;
     let quality = null;
+    let evaluator = null;
     let attempts = 0;
     let accepted = false;
+    const maxAttempts = QUALITY_RETRY_LIMIT + (EVALUATOR_LOOP_ENABLED ? EVALUATOR_RETRY_LIMIT : 0);
+    let correctionHint = "";
 
-    while (attempts <= QUALITY_RETRY_LIMIT) {
+    while (attempts <= maxAttempts) {
       const attemptDirective =
         attempts === 0
           ? moderatorDirective
-          : `${moderatorDirective} Quality retry: improve specificity, stay on-topic, avoid repetition, and be at least ${QUALITY_MIN_WORDS} words.`;
+          : [
+              `${moderatorDirective} Quality retry: improve specificity, stay on-topic, avoid repetition, and be at least ${QUALITY_MIN_WORDS} words.`,
+              correctionHint ? `Evaluator correction: ${correctionHint}` : ""
+            ]
+              .filter(Boolean)
+              .join(" ");
 
       const generated = await generateTurn({
         topic,
@@ -1386,12 +1547,23 @@ async function runConversationBatch({
         previousText: previous?.text,
         keywordSet: qualityKeywordSet
       });
+      evaluator = evaluateTurnSignals({
+        text: entry.text,
+        previousText: previous?.text,
+        recentTranscript: transcript,
+        keywordSet: qualityKeywordSet,
+        mode,
+        referenceMap
+      });
       attempts += 1;
 
-      if (quality.accepted || attempts > QUALITY_RETRY_LIMIT) {
-        accepted = quality.accepted;
+      const evaluatorAccepted = !EVALUATOR_LOOP_ENABLED || evaluator.accepted;
+      if ((quality.accepted && evaluatorAccepted) || attempts > maxAttempts) {
+        accepted = quality.accepted && evaluatorAccepted;
         break;
       }
+
+      correctionHint = evaluator?.correctionDirective || correctionHint;
 
       if (writeChunk) {
         writeChunk({
@@ -1402,8 +1574,11 @@ async function runConversationBatch({
             ? "too_short"
             : quality.repetitive
               ? "repetitive"
-              : "off_topic",
-          quality
+              : quality.offTopic
+                ? "off_topic"
+                : "evaluator_correction",
+          quality,
+          evaluator
         });
       }
     }
@@ -1411,7 +1586,15 @@ async function runConversationBatch({
     qualityScoreTotal += quality?.score ?? 0;
     qualityTurns += 1;
     retriesUsed += Math.max(0, attempts - 1);
-    repetitionStreak = quality?.repetitive ? repetitionStreak + 1 : 0;
+    evaluatorScoreTotal += evaluator?.overall ?? 0;
+    evaluatorTurns += 1;
+    if (attempts > QUALITY_RETRY_LIMIT + 1) {
+      evaluatorRetries += attempts - (QUALITY_RETRY_LIMIT + 1);
+    }
+    repetitionStreak =
+      quality?.repetitive || (EVALUATOR_LOOP_ENABLED && Number(evaluator?.nonRepetition || 1) < 0.24)
+        ? repetitionStreak + 1
+        : 0;
 
     transcript.push(entry);
     newEntries.push(entry);
@@ -1423,6 +1606,7 @@ async function runConversationBatch({
         totalTurns: transcript.length,
         quality: {
           ...quality,
+          evaluator: EVALUATOR_LOOP_ENABLED ? evaluator : null,
           attempts,
           accepted,
           repetitionStreak
@@ -1475,7 +1659,9 @@ async function runConversationBatch({
     memoryStats,
     qualitySummary: {
       avgScore: Number((qualityTurns ? qualityScoreTotal / qualityTurns : 0).toFixed(4)),
+      evaluatorAvgScore: Number((evaluatorTurns ? evaluatorScoreTotal / evaluatorTurns : 0).toFixed(4)),
       retriesUsed,
+      evaluatorRetries,
       turnsEvaluated: qualityTurns
     }
   };
@@ -1926,6 +2112,14 @@ app.post("/api/conversation/stream", async (req, res) => {
           maxSimilarity: QUALITY_MAX_SIMILARITY,
           minTopicCoverage: QUALITY_MIN_TOPIC_COVERAGE,
           retryLimit: QUALITY_RETRY_LIMIT
+        },
+        evaluator: {
+          enabled: EVALUATOR_LOOP_ENABLED,
+          retryLimit: EVALUATOR_RETRY_LIMIT,
+          minOverall: EVALUATOR_MIN_OVERALL,
+          minNovelty: EVALUATOR_MIN_NOVELTY,
+          minCoherence: EVALUATOR_MIN_COHERENCE,
+          minEvidence: EVALUATOR_MIN_EVIDENCE
         }
       }
     });
