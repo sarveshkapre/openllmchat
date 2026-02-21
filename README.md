@@ -77,6 +77,9 @@ npm start
 - `AGENT_WEB_TOOL_ENABLED`: enable per-agent web search notes across modes (default `true`)
 - `AGENT_WEB_TOOL_MAX_REFERENCES`: max tool references retrieved per refresh (default `3`)
 - `AGENT_WEB_TOOL_REFRESH_INTERVAL`: refresh web tool notes every N turns (default `2`)
+- `TURN_STREAMING_ENABLED`: enable incremental per-turn stream chunks (default `true`)
+- `TURN_STREAM_CHUNK_SIZE`: characters per streamed chunk (default `28`)
+- `TURN_STREAM_DELAY_MS`: delay between stream chunks in ms (default `16`)
 - `MAX_TURN_CHARS`: max characters stored per generated turn after normalization (default `1400`)
 - `RATE_LIMIT_WINDOW_MS`: API rate limit window in milliseconds (default `60000`)
 - `RATE_LIMIT_MAX_REQUESTS`: max API requests per client IP per window (default `180`)
@@ -126,7 +129,7 @@ Request body:
 }
 ```
 
-`agents` is optional and supports partial updates (`name`, `style`, and `temperature`) for `agent-a` / `agent-b`.
+`agents` is optional and supports partial updates (`name`, `persona`, `style`, `tools`, and `temperature`) for `agent-a` / `agent-b`.
 
 Response includes generated turns, total turns, memory stats, title/starred/mode metadata, brief, agents, quality summary, and stop reason.
 
@@ -137,6 +140,8 @@ Same behavior as `POST /api/conversation`, but returns newline-delimited JSON ch
 - `meta`: conversation info, engine, memory stats, title/starred/mode, brief, agents, charter, guardrails
 - `references`: retrieved citation notes for the next debate turn
 - `retry`: quality optimizer retry event
+- `turn_start`: start marker for one turn being streamed
+- `turn_delta`: incremental text chunk for the in-progress turn
 - `turn`: one generated turn plus quality stats
 - `moderator`: moderator assessment/directive
 - `done`: final summary with stop reason, title/starred/mode, brief, agents, quality summary, and updated memory stats

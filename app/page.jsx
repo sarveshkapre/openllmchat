@@ -37,6 +37,26 @@ function formatUpdatedAt(value) {
   });
 }
 
+function upsertMessageByTurn(messages, entry) {
+  if (!entry || typeof entry !== "object") {
+    return messages;
+  }
+
+  const turn = Number(entry.turn);
+  if (!Number.isFinite(turn)) {
+    return messages;
+  }
+
+  const index = messages.findIndex((item) => Number(item?.turn) === turn);
+  if (index === -1) {
+    return [...messages, entry];
+  }
+
+  const next = messages.slice();
+  next[index] = { ...next[index], ...entry };
+  return next;
+}
+
 export default function HomePage() {
   const [theme, setTheme] = useState("light");
   const [historyOpen, setHistoryOpen] = useState(true);
@@ -204,6 +224,7 @@ export default function HomePage() {
       let generatedTurns = 0;
       let finalTotalTurns = totalTurns;
       let stopReason = "max_turns";
+      const completedTurns = new Set();
 
       const handleChunk = (chunk) => {
         if (!chunk || typeof chunk !== "object") {
@@ -222,9 +243,41 @@ export default function HomePage() {
           return;
         }
 
+        if (chunk.type === "turn_start") {
+          const provisional = {
+            turn: Number(chunk.turn),
+            speaker: String(chunk.speaker || "Agent"),
+            speakerId: String(chunk.speakerId || ""),
+            text: ""
+          };
+          setMessages((previous) => upsertMessageByTurn(previous, provisional));
+          const nextTotal = Number(chunk.totalTurns || finalTotalTurns);
+          finalTotalTurns = nextTotal;
+          setTotalTurns(nextTotal);
+          return;
+        }
+
+        if (chunk.type === "turn_delta") {
+          const partial = {
+            turn: Number(chunk.turn),
+            speaker: String(chunk.speaker || "Agent"),
+            speakerId: String(chunk.speakerId || ""),
+            text: String(chunk.text || "")
+          };
+          setMessages((previous) => upsertMessageByTurn(previous, partial));
+          const nextTotal = Number(chunk.totalTurns || finalTotalTurns);
+          finalTotalTurns = nextTotal;
+          setTotalTurns(nextTotal);
+          return;
+        }
+
         if (chunk.type === "turn" && chunk.entry) {
-          generatedTurns += 1;
-          setMessages((previous) => [...previous, chunk.entry]);
+          const completedTurn = Number(chunk.entry.turn);
+          if (!completedTurns.has(completedTurn)) {
+            completedTurns.add(completedTurn);
+            generatedTurns += 1;
+          }
+          setMessages((previous) => upsertMessageByTurn(previous, chunk.entry));
           const nextTotal = Number(chunk.totalTurns || finalTotalTurns + 1);
           finalTotalTurns = nextTotal;
           setTotalTurns(nextTotal);

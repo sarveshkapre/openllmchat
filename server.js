@@ -175,6 +175,9 @@ const CITATION_MIN_REFERENCE_CONFIDENCE = readFloatEnv("CITATION_MIN_REFERENCE_C
 const AGENT_WEB_TOOL_ENABLED = readBoolEnv("AGENT_WEB_TOOL_ENABLED", true);
 const AGENT_WEB_TOOL_MAX_REFERENCES = readIntEnv("AGENT_WEB_TOOL_MAX_REFERENCES", 3, 1, 6);
 const AGENT_WEB_TOOL_REFRESH_INTERVAL = readIntEnv("AGENT_WEB_TOOL_REFRESH_INTERVAL", 2, 1, 10);
+const TURN_STREAMING_ENABLED = readBoolEnv("TURN_STREAMING_ENABLED", true);
+const TURN_STREAM_CHUNK_SIZE = readIntEnv("TURN_STREAM_CHUNK_SIZE", 28, 8, 180);
+const TURN_STREAM_DELAY_MS = readIntEnv("TURN_STREAM_DELAY_MS", 16, 0, 250);
 const MAX_TURN_CHARS = readIntEnv("MAX_TURN_CHARS", 1400, 300, 8000);
 const RATE_LIMIT_WINDOW_MS = readIntEnv("RATE_LIMIT_WINDOW_MS", 60000, 1000, 3600000);
 const RATE_LIMIT_MAX_REQUESTS = readIntEnv("RATE_LIMIT_MAX_REQUESTS", 180, 20, 5000);
@@ -995,6 +998,68 @@ function stripDonePrefix(text) {
   return String(text || "")
     .replace(/^\s*DONE\b\s*:?-?\s*/i, "")
     .trim();
+}
+
+function sleep(ms) {
+  const duration = Math.max(0, Number(ms) || 0);
+  if (duration === 0) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => setTimeout(resolve, duration));
+}
+
+function splitTurnTextForStreaming(text, chunkSize = 28) {
+  const content = String(text || "");
+  const size = Math.max(1, Number(chunkSize) || 28);
+  const chunks = [];
+  let cursor = 0;
+  while (cursor < content.length) {
+    let next = Math.min(content.length, cursor + size);
+    if (next < content.length) {
+      const boundary = content.lastIndexOf(" ", next);
+      if (boundary > cursor + Math.floor(size * 0.45)) {
+        next = boundary + 1;
+      }
+    }
+    const piece = content.slice(cursor, next);
+    if (piece) {
+      chunks.push(piece);
+    }
+    cursor = next;
+  }
+  return chunks.length ? chunks : [content];
+}
+
+async function streamTurnProgress({ writeChunk, entry, totalTurns }) {
+  if (!writeChunk || !entry) {
+    return;
+  }
+
+  const chunks = splitTurnTextForStreaming(entry.text, TURN_STREAM_CHUNK_SIZE);
+  let assembled = "";
+  writeChunk({
+    type: "turn_start",
+    turn: entry.turn,
+    speaker: entry.speaker,
+    speakerId: entry.speakerId,
+    totalTurns
+  });
+
+  for (const chunk of chunks) {
+    assembled += chunk;
+    writeChunk({
+      type: "turn_delta",
+      turn: entry.turn,
+      speaker: entry.speaker,
+      speakerId: entry.speakerId,
+      delta: chunk,
+      text: assembled,
+      totalTurns
+    });
+    if (TURN_STREAM_DELAY_MS > 0) {
+      await sleep(TURN_STREAM_DELAY_MS);
+    }
+  }
 }
 
 function getPartnerAgent(agents, speaker) {
@@ -2224,6 +2289,13 @@ async function runConversationBatch({
     newEntries.push(entry);
 
     if (writeChunk) {
+      if (TURN_STREAMING_ENABLED) {
+        await streamTurnProgress({
+          writeChunk,
+          entry,
+          totalTurns: transcript.length
+        });
+      }
       writeChunk({
         type: "turn",
         entry,
@@ -2825,6 +2897,11 @@ app.post("/api/conversation/stream", async (req, res) => {
           webSearch: AGENT_WEB_TOOL_ENABLED,
           webSearchMaxReferences: AGENT_WEB_TOOL_MAX_REFERENCES,
           webSearchRefreshInterval: AGENT_WEB_TOOL_REFRESH_INTERVAL
+        },
+        streaming: {
+          enabled: TURN_STREAMING_ENABLED,
+          chunkSize: TURN_STREAM_CHUNK_SIZE,
+          delayMs: TURN_STREAM_DELAY_MS
         }
       }
     });
