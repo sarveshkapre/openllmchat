@@ -72,6 +72,37 @@ app.use((req, res, next) => {
   next();
 });
 
+app.use((req, res, next) => {
+  const incomingRequestId = String(req.headers["x-request-id"] || "").trim();
+  const requestId = /^[a-zA-Z0-9._:-]{6,80}$/.test(incomingRequestId) ? incomingRequestId : randomUUID();
+  req.requestId = requestId;
+  res.setHeader("X-Request-Id", requestId);
+
+  if (!LOG_API_REQUESTS || !String(req.path || "").startsWith("/api")) {
+    return next();
+  }
+
+  const startedAt = Date.now();
+  logEvent("info", "api.request.start", {
+    requestId,
+    method: req.method,
+    path: req.path
+  });
+
+  res.on("finish", () => {
+    const level = res.statusCode >= 500 ? "error" : res.statusCode >= 400 ? "warn" : "info";
+    logEvent(level, "api.request.end", {
+      requestId,
+      method: req.method,
+      path: req.path,
+      statusCode: res.statusCode,
+      durationMs: Date.now() - startedAt
+    });
+  });
+
+  return next();
+});
+
 const DEFAULT_AGENTS = [
   {
     id: "agent-a",
@@ -148,6 +179,90 @@ function readBoolEnv(name, fallback = false) {
   return ["1", "true", "yes", "on"].includes(raw);
 }
 
+const LOG_LEVELS = {
+  debug: 10,
+  info: 20,
+  warn: 30,
+  error: 40,
+  off: 100
+};
+
+function normalizeLogLevel(value, fallback = "info") {
+  const candidate = String(value || fallback || "info")
+    .trim()
+    .toLowerCase();
+  if (Object.prototype.hasOwnProperty.call(LOG_LEVELS, candidate)) {
+    return candidate;
+  }
+  return fallback;
+}
+
+function sanitizeLogValue(value) {
+  if (value === null || value === undefined) {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const compact = value.replace(/\s+/g, " ").trim();
+    return compact.length > 220 ? `${compact.slice(0, 217)}...` : compact;
+  }
+
+  if (typeof value === "number" || typeof value === "boolean") {
+    return value;
+  }
+
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+
+  if (Array.isArray(value)) {
+    return value.slice(0, 10).map((item) => sanitizeLogValue(item));
+  }
+
+  if (typeof value === "object") {
+    const next = {};
+    for (const [key, fieldValue] of Object.entries(value)) {
+      if (fieldValue === undefined) {
+        continue;
+      }
+      next[key] = sanitizeLogValue(fieldValue);
+    }
+    return next;
+  }
+
+  return String(value);
+}
+
+function formatConsoleValue(value) {
+  if (value === null) {
+    return "null";
+  }
+  if (value === undefined) {
+    return "undefined";
+  }
+  if (typeof value === "string") {
+    return value.includes(" ") ? JSON.stringify(value) : value;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  return JSON.stringify(value);
+}
+
+function serializeError(error) {
+  if (!error) {
+    return { message: "Unknown error" };
+  }
+  return sanitizeLogValue({
+    name: error?.name,
+    message: String(error?.message || error),
+    code: error?.code || error?.type,
+    status: error?.status,
+    param: error?.param || error?.error?.param,
+    requestId: error?.requestID || error?.requestId
+  });
+}
+
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
@@ -203,6 +318,14 @@ const CSRF_ALLOWED_ORIGINS = new Set(
     .filter(Boolean)
 );
 const API_WRITE_TOKEN = String(process.env.API_WRITE_TOKEN || "").trim();
+const LOG_LEVEL = normalizeLogLevel(process.env.LOG_LEVEL, isDev ? "info" : "warn");
+const LOG_JSON = readBoolEnv("LOG_JSON", false);
+const LOG_API_REQUESTS = readBoolEnv("LOG_API_REQUESTS", true);
+const LOG_CONVERSATION_EVENTS = readBoolEnv("LOG_CONVERSATION_EVENTS", true);
+const LOG_TURN_EVENTS = readBoolEnv("LOG_TURN_EVENTS", isDev);
+const LOG_STREAM_CHUNKS = readBoolEnv("LOG_STREAM_CHUNKS", false);
+const LOG_MODEL_EVENTS = readBoolEnv("LOG_MODEL_EVENTS", false);
+const LOG_THRESHOLD = LOG_LEVELS[LOG_LEVEL] ?? LOG_LEVELS.info;
 
 const apiRateState = new Map();
 const generationRateState = new Map();
@@ -210,6 +333,42 @@ let rateSweepTick = 0;
 const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 app.set("trust proxy", TRUST_PROXY);
+
+function getRequestId(req) {
+  return String(req?.requestId || "n/a");
+}
+
+function logEvent(level, event, fields = {}) {
+  const normalizedLevel = normalizeLogLevel(level, "info");
+  if ((LOG_LEVELS[normalizedLevel] ?? LOG_LEVELS.info) < LOG_THRESHOLD) {
+    return;
+  }
+
+  const payload = {
+    ts: new Date().toISOString(),
+    level: normalizedLevel,
+    event,
+    ...sanitizeLogValue(fields || {})
+  };
+
+  if (LOG_JSON) {
+    console.log(JSON.stringify(payload));
+    return;
+  }
+
+  const entries = Object.entries(payload)
+    .filter(([key]) => !["ts", "level", "event"].includes(key))
+    .map(([key, value]) => `${key}=${formatConsoleValue(value)}`);
+  const suffix = entries.length ? ` ${entries.join(" ")}` : "";
+  console.log(`[${payload.ts}] ${normalizedLevel.toUpperCase()} ${event}${suffix}`);
+}
+
+function logError(level, event, error, fields = {}) {
+  logEvent(level, event, {
+    ...fields,
+    error: serializeError(error)
+  });
+}
 
 const model = process.env.OPENAI_MODEL || "gpt-5.2";
 const fallbackModel = process.env.OPENAI_FALLBACK_MODEL || "gpt-4o-mini";
@@ -1212,7 +1371,18 @@ function localTurn(topic, speaker, transcript, moderatorDirective, brief, mode =
   return objectiveHint ? `${line} We should keep the objective in frame: ${objectiveHint}.` : line;
 }
 
-async function generateTurn({ topic, speaker, agents, transcript, memory, moderatorDirective, brief, mode, references }) {
+async function generateTurn({
+  topic,
+  speaker,
+  agents,
+  transcript,
+  memory,
+  moderatorDirective,
+  brief,
+  mode,
+  references,
+  requestId
+}) {
   if (!client) {
     return localTurn(topic, speaker, transcript, moderatorDirective, brief, mode, references);
   }
@@ -1246,6 +1416,14 @@ async function generateTurn({ topic, speaker, agents, transcript, memory, modera
       fallbackModel,
       reasoningEffort,
       temperature: speaker.temperature,
+      onEvent: LOG_MODEL_EVENTS
+        ? (event, fields) =>
+            logEvent("debug", event, {
+              requestId,
+              speaker: speaker?.name,
+              ...fields
+            })
+        : null,
       messages: [
         {
           role: "system",
@@ -1289,7 +1467,11 @@ async function generateTurn({ topic, speaker, agents, transcript, memory, modera
       localTurn(topic, speaker, transcript, moderatorDirective, brief, mode, references)
     );
   } catch (error) {
-    console.error("Model generation failed, using local fallback:", error?.message || error);
+    logError("warn", "model.turn.fallback", error, {
+      requestId,
+      speaker: speaker?.name,
+      mode
+    });
     return localTurn(topic, speaker, transcript, moderatorDirective, brief, mode, references);
   }
 }
@@ -1919,7 +2101,7 @@ function localModeratorAssessment({ topic, transcript, brief, mode }) {
   };
 }
 
-async function runModerator({ topic, transcript, memory, currentDirective, brief, mode }) {
+async function runModerator({ topic, transcript, memory, currentDirective, brief, mode, requestId }) {
   if (transcript.length < 2) {
     return {
       onTopic: true,
@@ -1944,58 +2126,71 @@ async function runModerator({ topic, transcript, memory, currentDirective, brief
     .map((item) => item.token)
     .join(", ");
 
-  const result = await createChatCompletionWithFallback({
-    client,
-    model,
-    fallbackModel,
-    reasoningEffort,
-    temperature: 0,
-    messages: [
-      {
-        role: "system",
-        content:
-          "You are a strict conversation moderator. Return JSON only with keys: onTopic, repetitive, tooShort, done, directive."
-      },
-      {
-        role: "user",
-        content: [
-          `Topic: ${topic}`,
-          `Objective: ${brief?.objective || "(none)"}`,
-          `Constraints: ${brief?.constraintsText || "(none)"}`,
-          `Done criteria: ${brief?.doneCriteria || "(none)"}`,
-          `Conversation mode: ${mode}`,
-          `Current directive: ${currentDirective || "(none)"}`,
-          `Memory tokens: ${memoryTokens || "(none)"}`,
-          "Recent conversation:",
-          recent,
-          "Rules:",
-          "- onTopic=false if recent turns drift from topic.",
-          "- repetitive=true if last turns repeat phrasing/claims or use formulaic template wording.",
-          "- tooShort=true if content lacks depth.",
-          "- done=true only if objective appears complete.",
-          "- directive must be one concise imperative sentence.",
-          "- In debate mode emphasize strongest opposing arguments and crux.",
-          "- In synthesis mode emphasize convergence and concrete next actions.",
-          "- In exploration mode emphasize novel testable ideas."
-        ].join("\n")
-      }
-    ]
-  });
+  try {
+    const result = await createChatCompletionWithFallback({
+      client,
+      model,
+      fallbackModel,
+      reasoningEffort,
+      temperature: 0,
+      onEvent: LOG_MODEL_EVENTS
+        ? (event, fields) =>
+            logEvent("debug", event, {
+              requestId,
+              component: "moderator",
+              ...fields
+            })
+        : null,
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are a strict conversation moderator. Return JSON only with keys: onTopic, repetitive, tooShort, done, directive."
+        },
+        {
+          role: "user",
+          content: [
+            `Topic: ${topic}`,
+            `Objective: ${brief?.objective || "(none)"}`,
+            `Constraints: ${brief?.constraintsText || "(none)"}`,
+            `Done criteria: ${brief?.doneCriteria || "(none)"}`,
+            `Conversation mode: ${mode}`,
+            `Current directive: ${currentDirective || "(none)"}`,
+            `Memory tokens: ${memoryTokens || "(none)"}`,
+            "Recent conversation:",
+            recent,
+            "Rules:",
+            "- onTopic=false if recent turns drift from topic.",
+            "- repetitive=true if last turns repeat phrasing/claims or use formulaic template wording.",
+            "- tooShort=true if content lacks depth.",
+            "- done=true only if objective appears complete.",
+            "- directive must be one concise imperative sentence.",
+            "- In debate mode emphasize strongest opposing arguments and crux.",
+            "- In synthesis mode emphasize convergence and concrete next actions.",
+            "- In exploration mode emphasize novel testable ideas."
+          ].join("\n")
+        }
+      ]
+    });
 
-  const raw = extractAssistantText(result.completion);
-  const parsed = parseJsonObject(raw);
+    const raw = extractAssistantText(result.completion);
+    const parsed = parseJsonObject(raw);
 
-  if (!parsed || typeof parsed !== "object") {
+    if (!parsed || typeof parsed !== "object") {
+      return localModeratorAssessment({ topic, transcript, brief, mode });
+    }
+
+    return {
+      onTopic: Boolean(parsed.onTopic),
+      repetitive: Boolean(parsed.repetitive),
+      tooShort: Boolean(parsed.tooShort),
+      done: Boolean(parsed.done),
+      directive: String(parsed.directive || "Stay on-topic and add one concrete next step.").slice(0, 280)
+    };
+  } catch (error) {
+    logError("warn", "moderator.fallback", error, { requestId, mode });
     return localModeratorAssessment({ topic, transcript, brief, mode });
   }
-
-  return {
-    onTopic: Boolean(parsed.onTopic),
-    repetitive: Boolean(parsed.repetitive),
-    tooShort: Boolean(parsed.tooShort),
-    done: Boolean(parsed.done),
-    directive: String(parsed.directive || "Stay on-topic and add one concrete next step.").slice(0, 280)
-  };
 }
 
 async function resolveConversation(body) {
@@ -2089,7 +2284,10 @@ async function finalizeMemory(conversationId, topic, newEntries, totalTurns) {
       model
     });
   } catch (error) {
-    console.error("Memory agent failed:", error);
+    logError("warn", "memory.agent.failed", error, {
+      conversationId,
+      totalTurns
+    });
     return getCompressedMemory(conversationId).stats;
   }
 }
@@ -2152,7 +2350,8 @@ async function runConversationBatch({
   turns,
   memory,
   references = [],
-  writeChunk
+  writeChunk,
+  requestId
 }) {
   const newEntries = [];
   const startedAt = Date.now();
@@ -2182,9 +2381,27 @@ async function runConversationBatch({
   let citationClaimCount = 0;
   let citationConfidenceTotal = 0;
 
+  if (LOG_CONVERSATION_EVENTS) {
+    logEvent("info", "conversation.batch.start", {
+      requestId,
+      conversationId,
+      mode,
+      requestedTurns: turns,
+      startingTurns: transcript.length,
+      agents: (agents || DEFAULT_AGENTS).map((item) => item?.name).filter(Boolean)
+    });
+  }
+
   for (let i = 0; i < turns; i += 1) {
     if (Date.now() - startedAt > MAX_GENERATION_MS) {
       stopReason = "time_limit";
+      logEvent("warn", "conversation.batch.stop", {
+        requestId,
+        conversationId,
+        reason: stopReason,
+        elapsedMs: Date.now() - startedAt,
+        addedTurns: newEntries.length
+      });
       break;
     }
 
@@ -2221,6 +2438,15 @@ async function runConversationBatch({
           activeReferences = retrieved;
           referenceMap = new Map(retrieved.map((item) => [String(item.id).toUpperCase(), item]));
           upsertRetrievalSources(conversationId, nextTurn, activeReferences);
+          if (LOG_TURN_EVENTS) {
+            logEvent("debug", "conversation.references.updated", {
+              requestId,
+              conversationId,
+              turn: nextTurn,
+              mode: citationMode ? "citation" : "web",
+              count: retrieved.length
+            });
+          }
           if (writeChunk) {
             writeChunk({
               type: "references",
@@ -2229,7 +2455,15 @@ async function runConversationBatch({
             });
           }
         }
-      } catch {
+      } catch (error) {
+        if (LOG_TURN_EVENTS || LOG_CONVERSATION_EVENTS) {
+          logError("warn", "conversation.references.error", error, {
+            requestId,
+            conversationId,
+            turn: nextTurn,
+            mode: citationMode ? "citation" : "web"
+          });
+        }
         // Ignore retrieval failures and continue with existing references.
       }
     }
@@ -2242,6 +2476,17 @@ async function runConversationBatch({
     let accepted = false;
     const maxAttempts = QUALITY_RETRY_LIMIT + (EVALUATOR_LOOP_ENABLED ? EVALUATOR_RETRY_LIMIT : 0);
     let correctionHint = "";
+
+    if (LOG_TURN_EVENTS) {
+      logEvent("debug", "conversation.turn.start", {
+        requestId,
+        conversationId,
+        turn: nextTurn,
+        speaker: speaker?.name,
+        mode,
+        maxAttempts: maxAttempts + 1
+      });
+    }
 
     while (attempts <= maxAttempts) {
       const attemptDirective =
@@ -2263,7 +2508,8 @@ async function runConversationBatch({
         memory,
         moderatorDirective: attemptDirective,
         brief,
-        references: activeReferences
+        references: activeReferences,
+        requestId
       });
 
       signaledDone = containsDoneToken(generated);
@@ -2314,6 +2560,22 @@ async function runConversationBatch({
           evaluator
         });
       }
+
+      if (LOG_TURN_EVENTS) {
+        logEvent("debug", "conversation.turn.retry", {
+          requestId,
+          conversationId,
+          turn: nextTurn,
+          attempt: attempts,
+          reason: quality.tooShort
+            ? "too_short"
+            : quality.repetitive
+              ? "repetitive"
+              : quality.offTopic
+                ? "off_topic"
+                : "evaluator_correction"
+        });
+      }
     }
 
     qualityScoreTotal += quality?.score ?? 0;
@@ -2348,6 +2610,22 @@ async function runConversationBatch({
     transcript.push(entry);
     newEntries.push(entry);
 
+    if (LOG_TURN_EVENTS || !accepted) {
+      logEvent(accepted ? "debug" : "warn", "conversation.turn.complete", {
+        requestId,
+        conversationId,
+        turn: nextTurn,
+        speaker: speaker?.name,
+        attempts,
+        accepted,
+        signaledDone,
+        repetitionStreak,
+        qualityScore: quality?.score,
+        evaluatorScore: evaluator?.overall,
+        wordCount: quality?.wordCount
+      });
+    }
+
     if (writeChunk) {
       if (TURN_STREAMING_ENABLED) {
         await streamTurnProgress({
@@ -2373,11 +2651,24 @@ async function runConversationBatch({
 
     if (repetitionStreak >= MAX_REPETITION_STREAK) {
       stopReason = "repetition_guard";
+      logEvent("warn", "conversation.batch.stop", {
+        requestId,
+        conversationId,
+        reason: stopReason,
+        turn: nextTurn,
+        repetitionStreak
+      });
       break;
     }
 
     if (signaledDone) {
       stopReason = "done_token";
+      logEvent("info", "conversation.batch.stop", {
+        requestId,
+        conversationId,
+        reason: stopReason,
+        turn: nextTurn
+      });
       break;
     }
 
@@ -2389,7 +2680,8 @@ async function runConversationBatch({
         brief,
         transcript,
         memory,
-        currentDirective: moderatorDirective
+        currentDirective: moderatorDirective,
+        requestId
       });
 
       moderatorDirective = moderation.directive || moderatorDirective;
@@ -2400,6 +2692,12 @@ async function runConversationBatch({
 
       if (moderation.done) {
         stopReason = "moderator_done";
+        logEvent("info", "conversation.batch.stop", {
+          requestId,
+          conversationId,
+          reason: stopReason,
+          turn: nextTurn
+        });
         break;
       }
     }
@@ -2410,6 +2708,22 @@ async function runConversationBatch({
     insertClaimCitations(conversationId, citedClaims);
   }
   const memoryStats = await finalizeMemory(conversationId, topic, newEntries, transcript.length);
+
+  if (LOG_CONVERSATION_EVENTS) {
+    logEvent(stopReason === "max_turns" ? "info" : "warn", "conversation.batch.complete", {
+      requestId,
+      conversationId,
+      mode,
+      addedTurns: newEntries.length,
+      totalTurns: transcript.length,
+      stopReason,
+      retriesUsed,
+      evaluatorRetries,
+      elapsedMs: Date.now() - startedAt,
+      avgQuality: Number((qualityTurns ? qualityScoreTotal / qualityTurns : 0).toFixed(4)),
+      avgEvaluator: Number((evaluatorTurns ? evaluatorScoreTotal / evaluatorTurns : 0).toFixed(4))
+    });
+  }
 
   return {
     newEntries,
@@ -2461,6 +2775,7 @@ app.get("/api/conversation/:id", (req, res) => {
 });
 
 app.post("/api/conversation/:id/fork", async (req, res) => {
+  const requestId = getRequestId(req);
   try {
     const resolved = resolveConversationFromParams(req, res);
     if (!resolved) {
@@ -2536,7 +2851,7 @@ app.post("/api/conversation/:id/fork", async (req, res) => {
       })
     );
   } catch (error) {
-    console.error(error);
+    logError("error", "conversation.fork.failed", error, { requestId });
     return res.status(500).json({ error: "Failed to fork conversation." });
   }
 });
@@ -2760,6 +3075,7 @@ app.delete("/api/conversation/:id", (req, res) => {
 });
 
 app.post("/api/conversation/lab", async (req, res) => {
+  const requestId = getRequestId(req);
   try {
     const baseConversationId = sanitizeConversationId(req.body?.conversationId);
     const requestedTopic = sanitizeTopic(req.body?.topic);
@@ -2816,6 +3132,15 @@ app.post("/api/conversation/lab", async (req, res) => {
       return res.status(400).json({ error: "Topic is required." });
     }
 
+    if (LOG_CONVERSATION_EVENTS) {
+      logEvent("info", "conversation.lab.start", {
+        requestId,
+        baseConversationId: baseConversationId || null,
+        topic,
+        turnsPerMode: turns
+      });
+    }
+
     const runs = [];
     for (const mode of DISCOVERY_LAB_MODES) {
       const conversationId = randomUUID();
@@ -2854,7 +3179,8 @@ app.post("/api/conversation/lab", async (req, res) => {
         agents,
         transcript,
         turns,
-        memory: memoryBefore
+        memory: memoryBefore,
+        requestId
       });
 
       const conversation = getConversation(conversationId);
@@ -2891,15 +3217,21 @@ app.post("/api/conversation/lab", async (req, res) => {
       runs
     });
   } catch (error) {
-    console.error(error);
+    logError("error", "conversation.lab.failed", error, { requestId });
     return res.status(500).json({ error: "Failed to run discovery lab." });
   }
 });
 
 app.post("/api/conversation/stream", async (req, res) => {
+  const requestId = getRequestId(req);
   try {
     const setup = await resolveConversation(req.body);
     if (setup.error) {
+      logEvent("warn", "conversation.stream.invalid_request", {
+        requestId,
+        status: setup.status,
+        error: setup.error
+      });
       return res.status(setup.status).json({ error: setup.error });
     }
 
@@ -2912,8 +3244,27 @@ app.post("/api/conversation/stream", async (req, res) => {
       res.flushHeaders();
     }
 
+    if (LOG_CONVERSATION_EVENTS) {
+      logEvent("info", "conversation.stream.start", {
+        requestId,
+        conversationId,
+        mode,
+        requestedTurns: turns,
+        existingTurns: transcript.length
+      });
+    }
+
     const writeChunk = (payload) => {
       res.write(`${JSON.stringify(payload)}\n`);
+      if (LOG_STREAM_CHUNKS) {
+        logEvent("debug", "conversation.stream.chunk", {
+          requestId,
+          conversationId,
+          type: payload?.type,
+          turn: payload?.turn || payload?.entry?.turn || null,
+          textChars: typeof payload?.text === "string" ? payload.text.length : payload?.entry?.text?.length || 0
+        });
+      }
     };
 
     writeChunk({
@@ -2975,7 +3326,8 @@ app.post("/api/conversation/stream", async (req, res) => {
       transcript,
       turns,
       memory,
-      writeChunk
+      writeChunk,
+      requestId
     });
 
     writeChunk({
@@ -2994,9 +3346,18 @@ app.post("/api/conversation/stream", async (req, res) => {
       quality: batch.qualitySummary,
       references: batch.references
     });
+    if (LOG_CONVERSATION_EVENTS) {
+      logEvent(batch.stopReason === "max_turns" ? "info" : "warn", "conversation.stream.complete", {
+        requestId,
+        conversationId,
+        addedTurns: batch.newEntries.length,
+        totalTurns: batch.totalTurns,
+        stopReason: batch.stopReason
+      });
+    }
     res.end();
   } catch (error) {
-    console.error(error);
+    logError("error", "conversation.stream.failed", error, { requestId });
     if (res.headersSent) {
       res.write(`${JSON.stringify({ type: "error", error: "Failed to generate conversation." })}\n`);
       return res.end();
@@ -3007,13 +3368,28 @@ app.post("/api/conversation/stream", async (req, res) => {
 });
 
 app.post("/api/conversation", async (req, res) => {
+  const requestId = getRequestId(req);
   try {
     const setup = await resolveConversation(req.body);
     if (setup.error) {
+      logEvent("warn", "conversation.invalid_request", {
+        requestId,
+        status: setup.status,
+        error: setup.error
+      });
       return res.status(setup.status).json({ error: setup.error });
     }
 
     const { conversationId, topic, title, starred, mode, brief, agents, transcript, turns, memory } = setup;
+    if (LOG_CONVERSATION_EVENTS) {
+      logEvent("info", "conversation.request.start", {
+        requestId,
+        conversationId,
+        mode,
+        requestedTurns: turns,
+        existingTurns: transcript.length
+      });
+    }
     const batch = await runConversationBatch({
       conversationId,
       topic,
@@ -3022,7 +3398,8 @@ app.post("/api/conversation", async (req, res) => {
       agents,
       transcript,
       turns,
-      memory
+      memory,
+      requestId
     });
 
     return res.json({
@@ -3043,7 +3420,7 @@ app.post("/api/conversation", async (req, res) => {
       references: batch.references
     });
   } catch (error) {
-    console.error(error);
+    logError("error", "conversation.request.failed", error, { requestId });
     return res.status(500).json({ error: "Failed to generate conversation." });
   }
 });
@@ -3061,7 +3438,11 @@ app.use((error, req, res, next) => {
     return res.status(400).json({ error: "Invalid JSON payload." });
   }
 
-  console.error("Unhandled middleware error:", error);
+  logError("error", "api.middleware.unhandled_error", error, {
+    requestId: getRequestId(req),
+    method: req.method,
+    path: req.path
+  });
   return res.status(500).json({ error: "Internal server error." });
 });
 
@@ -3075,13 +3456,28 @@ app.all("*", (req, res, next) => {
 async function startServer() {
   await nextApp.prepare();
   app.listen(port, () => {
-    console.log(`openllmchat running on http://localhost:${port}`);
-    console.log(`SQLite database: ${dbPath}`);
-    console.log(`UI: Next.js (${isDev ? "dev" : "prod"})`);
+    logEvent("info", "server.started", {
+      port,
+      url: `http://localhost:${port}`,
+      database: dbPath,
+      uiMode: isDev ? "dev" : "prod",
+      model,
+      fallbackModel,
+      reasoningEffort
+    });
+    logEvent("info", "logging.config", {
+      level: LOG_LEVEL,
+      json: LOG_JSON,
+      apiRequests: LOG_API_REQUESTS,
+      conversation: LOG_CONVERSATION_EVENTS,
+      turns: LOG_TURN_EVENTS,
+      model: LOG_MODEL_EVENTS,
+      streamChunks: LOG_STREAM_CHUNKS
+    });
   });
 }
 
 startServer().catch((error) => {
-  console.error("Failed to start server:", error);
+  logError("error", "server.start.failed", error);
   process.exit(1);
 });

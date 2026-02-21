@@ -61,7 +61,7 @@ npm start
 - `MEMORY_CONFLICT_KEEP_LIMIT`: max stored conflict ledger records per conversation (default `160`)
 - `MEMORY_PROMPT_CONFLICT_LIMIT`: conflict ledger records injected into context (default `14`)
 - `MODERATOR_INTERVAL`: run moderator every N total turns (default `6`)
-- `MAX_GENERATION_MS`: hard per-request generation time budget (default `30000`)
+- `MAX_GENERATION_MS`: hard per-request generation time budget (default `180000`)
 - `MAX_REPETITION_STREAK`: allowed near-duplicate turn streak before stop (default `2`)
 - `QUALITY_MIN_WORDS`: minimum words required per turn before retry (default `9`)
 - `QUALITY_RETRY_LIMIT`: retries per turn when quality checks fail (default `1`)
@@ -95,6 +95,13 @@ npm start
 - `CSRF_PROTECTION`: enable/disable CSRF-style origin checks on write methods (default `true`)
 - `CSRF_ALLOWED_ORIGINS`: comma-separated extra origins allowed for browser write requests (default empty)
 - `API_WRITE_TOKEN`: optional shared token required on write requests (`Authorization: Bearer ...` or `x-api-key`)
+- `LOG_LEVEL`: runtime log level (`debug|info|warn|error|off`, default `info` in dev, `warn` in prod)
+- `LOG_JSON`: emit newline-delimited JSON logs instead of plain text (default `false`)
+- `LOG_API_REQUESTS`: log API request start/end with status and duration (default `true`)
+- `LOG_CONVERSATION_EVENTS`: log conversation batch lifecycle (default `true`)
+- `LOG_TURN_EVENTS`: log per-turn generation and retries (default `true` in dev, `false` in prod)
+- `LOG_MODEL_EVENTS`: log model attempt/fallback/retry metadata (default `false`)
+- `LOG_STREAM_CHUNKS`: log every streamed chunk event (default `false`)
 - `PORT`: server port (default `3000`)
 
 ## API

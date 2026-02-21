@@ -58,7 +58,8 @@ async function createChatCompletionWithFallback({
   fallbackModel,
   messages,
   temperature,
-  reasoningEffort
+  reasoningEffort,
+  onEvent
 }) {
   const primaryModel = String(model || "").trim();
   const secondaryModel = String(fallbackModel || "").trim();
@@ -88,6 +89,15 @@ async function createChatCompletionWithFallback({
     }
 
     try {
+      if (typeof onEvent === "function") {
+        onEvent("model.request.attempt", {
+          model: candidate,
+          fallback: candidate !== primaryModel,
+          hasTemperature: Object.prototype.hasOwnProperty.call(payload, "temperature"),
+          hasReasoningEffort: Object.prototype.hasOwnProperty.call(payload, "reasoning_effort")
+        });
+      }
+
       let finalPayload = { ...payload };
       let droppedTemperature = false;
       let droppedReasoning = false;
@@ -95,6 +105,12 @@ async function createChatCompletionWithFallback({
       while (true) {
         try {
           const completion = await client.chat.completions.create(finalPayload);
+          if (typeof onEvent === "function") {
+            onEvent("model.request.success", {
+              model: candidate,
+              fallback: candidate !== primaryModel
+            });
+          }
           return {
             completion,
             modelUsed: candidate,
@@ -106,6 +122,9 @@ async function createChatCompletionWithFallback({
             if (isTemperatureUnsupportedError(retryableError)) {
               droppedTemperature = true;
               delete finalPayload.temperature;
+              if (typeof onEvent === "function") {
+                onEvent("model.request.retry_without_temperature", { model: candidate });
+              }
               continue;
             }
           }
@@ -113,6 +132,9 @@ async function createChatCompletionWithFallback({
           if (!droppedReasoning && finalPayload.reasoning_effort && isReasoningEffortUnsupportedError(retryableError)) {
             droppedReasoning = true;
             delete finalPayload.reasoning_effort;
+            if (typeof onEvent === "function") {
+              onEvent("model.request.retry_without_reasoning_effort", { model: candidate });
+            }
             continue;
           }
 
@@ -121,6 +143,13 @@ async function createChatCompletionWithFallback({
       }
     } catch (error) {
       lastError = error;
+      if (typeof onEvent === "function") {
+        onEvent("model.request.error", {
+          model: candidate,
+          fallback: candidate !== primaryModel,
+          message: String(lastError?.message || lastError)
+        });
+      }
 
       if (!isModelAccessError(lastError)) {
         throw lastError;
