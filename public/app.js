@@ -14,6 +14,8 @@ const historySearchInput = document.querySelector("#history-search");
 const refreshMemoryBtn = document.querySelector("#refresh-memory-btn");
 const refreshInsightsBtn = document.querySelector("#refresh-insights-btn");
 const copyInsightsBtn = document.querySelector("#copy-insights-btn");
+const refreshDiscoveriesBtn = document.querySelector("#refresh-discoveries-btn");
+const copyDiscoveriesBtn = document.querySelector("#copy-discoveries-btn");
 const refreshScoreBtn = document.querySelector("#refresh-score-btn");
 const openBestLabBtn = document.querySelector("#open-best-lab-btn");
 const adoptBestModeBtn = document.querySelector("#adopt-best-mode-btn");
@@ -46,6 +48,10 @@ const insightStatusEl = document.querySelector("#insight-status");
 const insightDecisionsListEl = document.querySelector("#insight-decisions-list");
 const insightQuestionsListEl = document.querySelector("#insight-questions-list");
 const insightNextStepsListEl = document.querySelector("#insight-next-steps-list");
+const discoveryStatusEl = document.querySelector("#discovery-status");
+const discoveryHypothesesListEl = document.querySelector("#discovery-hypotheses-list");
+const discoveryExperimentsListEl = document.querySelector("#discovery-experiments-list");
+const discoveryRisksListEl = document.querySelector("#discovery-risks-list");
 const scoreStatusEl = document.querySelector("#score-status");
 const scoreFillEl = document.querySelector("#score-fill");
 const scoreComponentsListEl = document.querySelector("#score-components-list");
@@ -82,6 +88,7 @@ let qualityState = null;
 let scoreState = null;
 let memoryInspectorState = null;
 let insightState = null;
+let discoveryState = null;
 let labResultsState = [];
 let cachedConversations = [];
 let draftSaveTimer = null;
@@ -237,6 +244,10 @@ function setInsightStatus(text) {
   insightStatusEl.textContent = text;
 }
 
+function setDiscoveryStatus(text) {
+  discoveryStatusEl.textContent = text;
+}
+
 function setLabStatus(text) {
   labStatusEl.textContent = text;
 }
@@ -290,6 +301,17 @@ function clearInsightSnapshot(message = "Start or restore a thread to compute in
   insightQuestionsListEl.appendChild(createListEmpty("No open questions yet."));
   insightNextStepsListEl.appendChild(createListEmpty("No next steps yet."));
   setInsightStatus(message);
+}
+
+function clearDiscoveryRadar(message = "Start or restore a thread to map hypotheses and experiments.") {
+  discoveryState = null;
+  discoveryHypothesesListEl.innerHTML = "";
+  discoveryExperimentsListEl.innerHTML = "";
+  discoveryRisksListEl.innerHTML = "";
+  discoveryHypothesesListEl.appendChild(createListEmpty("No hypotheses yet."));
+  discoveryExperimentsListEl.appendChild(createListEmpty("No experiments yet."));
+  discoveryRisksListEl.appendChild(createListEmpty("No risks mapped yet."));
+  setDiscoveryStatus(message);
 }
 
 function clearScorecard(message = "Start or restore a thread to score progress.") {
@@ -519,6 +541,136 @@ async function refreshInsightSnapshot() {
   }
 }
 
+function renderDiscoveryItem(container, text, meta = "") {
+  const li = document.createElement("li");
+  li.className = "memory-item";
+
+  const title = document.createElement("span");
+  title.className = "memory-item-title";
+  title.textContent = text;
+  li.appendChild(title);
+
+  if (meta) {
+    const hint = document.createElement("span");
+    hint.className = "memory-item-meta";
+    hint.textContent = meta;
+    li.appendChild(hint);
+  }
+
+  container.appendChild(li);
+}
+
+function renderDiscoveryRadar(payload) {
+  const discoveries = payload?.discoveries || null;
+  discoveryState = discoveries;
+  if (!discoveries) {
+    clearDiscoveryRadar("No discovery radar available.");
+    return;
+  }
+
+  discoveryHypothesesListEl.innerHTML = "";
+  discoveryExperimentsListEl.innerHTML = "";
+  discoveryRisksListEl.innerHTML = "";
+
+  const hypotheses = discoveries.hypotheses || [];
+  const experiments = discoveries.experiments || [];
+  const risks = discoveries.risks || [];
+
+  if (!hypotheses.length) {
+    discoveryHypothesesListEl.appendChild(createListEmpty("No hypotheses yet."));
+  } else {
+    for (const item of hypotheses) {
+      renderDiscoveryItem(
+        discoveryHypothesesListEl,
+        `${item.id}: ${item.statement}`,
+        `${item.sourceType || "source"} • conf ${Number(item.confidence || 0).toFixed(2)}`
+      );
+    }
+  }
+
+  if (!experiments.length) {
+    discoveryExperimentsListEl.appendChild(createListEmpty("No experiments yet."));
+  } else {
+    for (const item of experiments) {
+      renderDiscoveryItem(discoveryExperimentsListEl, `${item.id}: ${item.protocol}`, `success: ${item.successSignal}`);
+    }
+  }
+
+  if (!risks.length) {
+    discoveryRisksListEl.appendChild(createListEmpty("No risks mapped yet."));
+  } else {
+    for (const item of risks) {
+      renderDiscoveryItem(discoveryRisksListEl, item);
+    }
+  }
+
+  const stats = discoveries.stats || {};
+  setDiscoveryStatus(
+    `${discoveries.discoveryStage || "early"} • novelty ${(Number(discoveries.noveltyScore || 0) * 100).toFixed(
+      0
+    )} • hypotheses ${Number(stats.hypothesisCount || hypotheses.length)} • experiments ${Number(
+      stats.experimentCount || experiments.length
+    )}`
+  );
+}
+
+function toDiscoveryMarkdown() {
+  if (!discoveryState) {
+    return "";
+  }
+
+  const topic = activeTopic || topicInput.value.trim() || "n/a";
+  const lines = [
+    `# Discovery Radar`,
+    ``,
+    `- Topic: ${topic}`,
+    `- Conversation ID: ${activeConversationId || "n/a"}`,
+    `- Mode: ${discoveryState.mode || DEFAULT_THREAD_MODE}`,
+    `- Novelty score: ${(Number(discoveryState.noveltyScore || 0) * 100).toFixed(0)}`,
+    `- Discovery stage: ${discoveryState.discoveryStage || "early"}`,
+    ``,
+    `## Hypotheses`,
+    ...(discoveryState.hypotheses?.length
+      ? discoveryState.hypotheses.map(
+          (item) =>
+            `- ${item.id} (${item.sourceType}, conf ${Number(item.confidence || 0).toFixed(2)}): ${item.statement}`
+        )
+      : ["- None yet"]),
+    ``,
+    `## Experiments`,
+    ...(discoveryState.experiments?.length
+      ? discoveryState.experiments.map((item) => `- ${item.id} [${item.hypothesisId}]: ${item.protocol}`)
+      : ["- None yet"]),
+    ``,
+    `## Risks`,
+    ...(discoveryState.risks?.length ? discoveryState.risks.map((line) => `- ${line}`) : ["- None yet"]),
+    ``,
+    `## Next Action`,
+    `- ${discoveryState.nextAction || "None yet"}`
+  ];
+
+  return lines.join("\n");
+}
+
+async function refreshDiscoveryRadar() {
+  if (!activeConversationId) {
+    clearDiscoveryRadar();
+    return;
+  }
+
+  setDiscoveryStatus("Refreshing discovery radar...");
+  try {
+    const response = await fetch(`/api/conversation/${encodeURIComponent(activeConversationId)}/discoveries`);
+    const result = await response.json();
+    if (!response.ok) {
+      throw new Error(result.error || "Could not refresh discovery radar");
+    }
+    renderDiscoveryRadar(result);
+  } catch (error) {
+    clearDiscoveryRadar("Discovery radar unavailable.");
+  }
+}
+
 function renderScoreItems(score) {
   scoreComponentsListEl.innerHTML = "";
   const components = score?.components || {};
@@ -598,6 +750,7 @@ async function refreshScorecard() {
 async function refreshThreadIntelligence(options = {}) {
   await refreshMemoryInspector();
   await refreshInsightSnapshot();
+  await refreshDiscoveryRadar();
   await refreshScorecard();
   if (options.withHistory) {
     await loadHistory();
@@ -1246,6 +1399,7 @@ async function restoreConversation() {
     setQualityChip(null);
     clearMemoryInspector();
     clearInsightSnapshot();
+    clearDiscoveryRadar();
     clearLabResults();
     clearScorecard();
     return;
@@ -1266,6 +1420,7 @@ async function restoreConversation() {
     setQualityChip(null);
     clearMemoryInspector();
     clearInsightSnapshot();
+    clearDiscoveryRadar();
     clearLabResults();
     clearScorecard();
   }
@@ -1311,6 +1466,7 @@ clearBtn.addEventListener("click", async () => {
   setQualityChip(null);
   clearMemoryInspector();
   clearInsightSnapshot();
+  clearDiscoveryRadar();
   clearLabResults();
   clearScorecard();
   await loadHistory();
@@ -1322,6 +1478,10 @@ refreshMemoryBtn.addEventListener("click", async () => {
 
 refreshInsightsBtn.addEventListener("click", async () => {
   await refreshInsightSnapshot();
+});
+
+refreshDiscoveriesBtn.addEventListener("click", async () => {
+  await refreshDiscoveryRadar();
 });
 
 refreshScoreBtn.addEventListener("click", async () => {
@@ -1410,6 +1570,21 @@ copyInsightsBtn.addEventListener("click", async () => {
     setStatus("Insight snapshot copied.");
   } catch (error) {
     setStatus("Clipboard blocked. Copy failed.");
+  }
+});
+
+copyDiscoveriesBtn.addEventListener("click", async () => {
+  const markdown = toDiscoveryMarkdown();
+  if (!markdown) {
+    setStatus("No discovery radar to copy yet.");
+    return;
+  }
+
+  try {
+    await navigator.clipboard.writeText(markdown);
+    setStatus("Discovery radar copied.");
+  } catch (error) {
+    setStatus("Clipboard blocked. Could not copy discovery radar.");
   }
 });
 
@@ -1607,6 +1782,7 @@ form.addEventListener("submit", async (event) => {
     setMemoryChip(null);
     clearMemoryInspector("Switched topic. Memory will rebuild for the new thread.");
     clearInsightSnapshot("Switched topic. Insights will rebuild for the new thread.");
+    clearDiscoveryRadar("Switched topic. Discovery radar will rebuild for the new thread.");
     clearLabResults("Switched topic. Run Discovery Lab again for this topic.");
     clearScorecard("Switched topic. Score will rebuild for the new thread.");
   }
@@ -1793,6 +1969,7 @@ form.addEventListener("submit", async (event) => {
       setQualityChip(null);
       clearMemoryInspector();
       clearInsightSnapshot();
+      clearDiscoveryRadar();
       clearLabResults();
       clearScorecard();
       await loadHistory();
@@ -1812,6 +1989,7 @@ setThreadMeta(null);
 setAgentFields(null);
 clearMemoryInspector();
 clearInsightSnapshot();
+clearDiscoveryRadar();
 clearLabResults();
 clearScorecard();
 restoreDraftState();

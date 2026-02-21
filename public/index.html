@@ -194,6 +194,32 @@
           </section>
           <section class="insight-panel">
             <div class="memory-inspector-topbar">
+              <h3>Discovery Radar</h3>
+              <div class="thread-actions">
+                <button id="refresh-discoveries-btn" class="secondary" type="button">Refresh radar</button>
+                <button id="copy-discoveries-btn" class="secondary" type="button">Copy radar</button>
+              </div>
+            </div>
+            <p id="discovery-status" class="memory-inspector-status">
+              Start or restore a thread to map hypotheses and experiments.
+            </p>
+            <div class="memory-inspector-grid">
+              <article class="memory-card">
+                <h4>Hypotheses</h4>
+                <ul id="discovery-hypotheses-list" class="memory-list"></ul>
+              </article>
+              <article class="memory-card">
+                <h4>Experiments</h4>
+                <ul id="discovery-experiments-list" class="memory-list"></ul>
+              </article>
+              <article class="memory-card">
+                <h4>Risks</h4>
+                <ul id="discovery-risks-list" class="memory-list"></ul>
+              </article>
+            </div>
+          </section>
+          <section class="insight-panel">
+            <div class="memory-inspector-topbar">
               <h3>Discovery Lab</h3>
               <div class="thread-actions">
                 <button id="open-best-lab-btn" class="secondary" type="button">Open best run</button>

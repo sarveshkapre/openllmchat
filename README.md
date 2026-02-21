@@ -41,6 +41,10 @@ Modern web app where two AI agents discuss a user topic in 10-turn batches while
   - key decisions
   - unresolved questions
   - concrete next steps
+- Discovery Radar panel for breakthrough loops:
+  - generated hypotheses from semantic memory
+  - experiment protocols with success/failure signals
+  - discovery risk map + novelty score
 - Objective Scorecard panel:
   - progress percentage toward completion
   - component breakdown (coverage, decisions, done signal, resolution)
@@ -233,6 +237,16 @@ Returns an actionable insight snapshot derived from compressed memory:
 - open questions
 - next steps
 - insight stats
+
+### `GET /api/conversation/:id/discoveries`
+
+Returns a discovery radar derived from transcript + compressed memory:
+
+- hypotheses with confidence and evidence source
+- experiment protocols linked to hypotheses
+- discovery risk map
+- novelty score and stage
+- next recommended discovery action
 
 ### `GET /api/conversation/:id/score`
 

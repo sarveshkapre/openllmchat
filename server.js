@@ -764,6 +764,16 @@ function uniqueLines(lines, limit = 3) {
   return result;
 }
 
+function compactLine(text, maxLen = 220) {
+  const normalized = String(text || "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (normalized.length <= maxLen) {
+    return normalized;
+  }
+  return `${normalized.slice(0, Math.max(1, maxLen - 3)).trimEnd()}...`;
+}
+
 function buildInsightSnapshot({ topic, brief, mode, memory }) {
   const grouped = memory?.groupedSemantic || {
     decisions: [],
@@ -808,6 +818,157 @@ function buildInsightSnapshot({ topic, brief, mode, memory }) {
       definitionCount: Number(memory?.stats?.definitionCount || 0),
       summaryCount: Number(memory?.stats?.summaryCount || 0),
       tokenCount: Number(memory?.stats?.tokenCount || 0)
+    }
+  };
+}
+
+function buildDiscoveryRadar({ topic, brief, mode, memory, transcript }) {
+  const grouped = memory?.groupedSemantic || {
+    decisions: [],
+    constraints: [],
+    definitions: [],
+    openQuestions: []
+  };
+  const openQuestions = semanticLines(grouped.openQuestions, 6);
+  const decisions = semanticLines(grouped.decisions, 6);
+  const constraints = semanticLines(grouped.constraints, 4);
+  const definitions = semanticLines(grouped.definitions, 4);
+  const summaryHighlights = (memory?.summaries || [])
+    .slice(0, 3)
+    .map((entry) => compactLine(entry.summary, 200))
+    .filter(Boolean);
+
+  const sourceSets = {
+    openQuestion: new Set(openQuestions.map((line) => line.toLowerCase())),
+    decision: new Set(decisions.map((line) => line.toLowerCase())),
+    constraint: new Set(constraints.map((line) => line.toLowerCase())),
+    definition: new Set(definitions.map((line) => line.toLowerCase())),
+    summary: new Set(summaryHighlights.map((line) => line.toLowerCase()))
+  };
+
+  const hypothesisSeeds = uniqueLines(
+    [
+      ...openQuestions,
+      ...constraints,
+      ...definitions,
+      ...summaryHighlights,
+      brief?.objective ? `Objective focus: ${brief.objective}` : ""
+    ],
+    5
+  );
+
+  const hypotheses = hypothesisSeeds.map((seed, index) => {
+    const seedKey = seed.toLowerCase();
+    const sourceType = sourceSets.openQuestion.has(seedKey)
+      ? "open_question"
+      : sourceSets.constraint.has(seedKey)
+        ? "constraint"
+        : sourceSets.definition.has(seedKey)
+          ? "definition"
+          : sourceSets.summary.has(seedKey)
+            ? "summary"
+            : sourceSets.decision.has(seedKey)
+              ? "decision"
+              : "objective";
+    const statement =
+      sourceType === "open_question"
+        ? `If we resolve "${compactLine(seed, 110)}", the thread can unlock a higher-confidence decision.`
+        : sourceType === "constraint"
+          ? `A solution that satisfies "${compactLine(seed, 110)}" will outperform broader alternatives.`
+          : sourceType === "definition"
+            ? `Clarifying "${compactLine(seed, 110)}" should reduce ambiguity and improve downstream choices.`
+            : sourceType === "summary"
+              ? `Expanding on "${compactLine(seed, 110)}" may surface a novel path not yet pressure-tested.`
+              : `Aligning execution with "${compactLine(seed, 110)}" should increase delivery certainty.`;
+
+    const confidenceBase =
+      sourceType === "decision" ? 0.74 : sourceType === "constraint" ? 0.7 : sourceType === "open_question" ? 0.62 : 0.66;
+
+    return {
+      id: `H${index + 1}`,
+      sourceType,
+      statement,
+      evidence: compactLine(seed, 180),
+      confidence: Number(clamp(confidenceBase - index * 0.04, 0.42, 0.92).toFixed(2))
+    };
+  });
+
+  const experiments = hypotheses.slice(0, 4).map((item, index) => ({
+    id: `E${index + 1}`,
+    hypothesisId: item.id,
+    protocol: compactLine(
+      `Run one focused ${mode} pass where each turn references this hypothesis and adds exactly one falsifiable claim: ${item.evidence}`,
+      220
+    ),
+    successSignal: compactLine(
+      openQuestions[index]
+        ? `Open question reduced or resolved: ${openQuestions[index]}`
+        : "Two independent turns converge on the same decision with rationale.",
+      180
+    ),
+    failureSignal: compactLine(
+      `Conversation repeats prior claims without new evidence in relation to ${item.id}.`,
+      180
+    )
+  }));
+
+  const riskLines = uniqueLines(
+    [
+      openQuestions.length > decisions.length
+        ? "Open questions are accumulating faster than decisions; risk of exploration without convergence."
+        : "",
+      constraints.length === 0
+        ? "Constraint memory is sparse; solutions may be impractical or under-specified."
+        : "",
+      Number(memory?.stats?.summaryCount || 0) === 0
+        ? "No summary snapshots yet; long-range context may drift over extended runs."
+        : "",
+      Number(memory?.stats?.tokenCount || 0) >= 140
+        ? "High token pressure in memory; low-value tokens may crowd out newer signals."
+        : "",
+      transcript?.length >= 30 && openQuestions.length >= 3
+        ? "Thread depth is high with unresolved questions; schedule a synthesis pass to avoid looping."
+        : ""
+    ],
+    4
+  );
+
+  const tokenDiversity = Math.min(1, Number(memory?.stats?.tokenCount || 0) / 160);
+  const questionPressure = Math.min(1, Number(memory?.stats?.openQuestionCount || 0) / 8);
+  const decisionMomentum = Math.min(1, Number(memory?.stats?.decisionCount || 0) / 6);
+  const summaryDepth = Math.min(1, Number(memory?.stats?.summaryCount || 0) / 5);
+  const noveltyScore = Number(
+    clamp(
+      tokenDiversity * 0.32 + questionPressure * 0.3 + (1 - Math.abs(questionPressure - decisionMomentum)) * 0.2 + summaryDepth * 0.18,
+      0,
+      1
+    ).toFixed(4)
+  );
+
+  return {
+    topic,
+    mode,
+    objective: brief?.objective || "",
+    noveltyScore,
+    discoveryStage:
+      noveltyScore >= 0.78
+        ? "frontier"
+        : noveltyScore >= 0.58
+          ? "promising"
+          : noveltyScore >= 0.38
+            ? "forming"
+            : "early",
+    hypotheses,
+    experiments,
+    risks: riskLines,
+    nextAction: experiments[0]?.protocol || "Run another focused pass with one falsifiable hypothesis.",
+    stats: {
+      tokenCount: Number(memory?.stats?.tokenCount || 0),
+      summaryCount: Number(memory?.stats?.summaryCount || 0),
+      decisionCount: Number(memory?.stats?.decisionCount || 0),
+      openQuestionCount: Number(memory?.stats?.openQuestionCount || 0),
+      hypothesisCount: hypotheses.length,
+      experimentCount: experiments.length
     }
   };
 }
@@ -1529,6 +1690,28 @@ app.get("/api/conversation/:id/insights", (req, res) => {
   });
 
   return res.json(withConversationMeta(conversationId, conversation, { mode, insights }));
+});
+
+app.get("/api/conversation/:id/discoveries", (req, res) => {
+  const resolved = resolveConversationFromParams(req, res);
+  if (!resolved) {
+    return;
+  }
+  const { conversationId, conversation } = resolved;
+
+  const transcript = getMessages(conversationId);
+  const brief = getConversationBrief(conversationId);
+  const mode = sanitizeConversationMode(conversation.mode, "exploration");
+  const memory = getCompressedMemory(conversationId);
+  const discoveries = buildDiscoveryRadar({
+    topic: conversation.topic,
+    brief,
+    mode,
+    memory,
+    transcript
+  });
+
+  return res.json(withConversationMeta(conversationId, conversation, { brief, discoveries }));
 });
 
 app.get("/api/conversation/:id/score", (req, res) => {
