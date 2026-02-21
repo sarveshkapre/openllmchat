@@ -6,7 +6,8 @@ Modern web app where two AI agents discuss a user topic for user-selected turn c
 
 - Next.js UI built with Tailwind CSS and shadcn-style components.
 - Minimal UI with only core actions: run conversation (topic + turns), switch light/dark theme, manage saved history (refresh/clear), and use a collapsible thread history sidebar.
-- Two agent personas that alternate each turn with live streaming output.
+- Two distinct agent personas that alternate each turn in a shared "room conversation" context.
+- Optional per-agent web research notes (DuckDuckGo + Wikipedia) that can be injected as tool context across modes.
 - Persistent conversation state in SQLite.
 - Advanced conversation engine remains available through API:
   - high-value token memory
@@ -73,6 +74,9 @@ npm start
 - `CITATION_REFRESH_INTERVAL`: refresh references every N generated turns (default `3`)
 - `CITATION_TIMEOUT_MS`: per-request timeout for citation retrieval calls (default `4500`)
 - `CITATION_MIN_REFERENCE_CONFIDENCE`: minimum confidence to keep a retrieved source (default `0.18`)
+- `AGENT_WEB_TOOL_ENABLED`: enable per-agent web search notes across modes (default `true`)
+- `AGENT_WEB_TOOL_MAX_REFERENCES`: max tool references retrieved per refresh (default `3`)
+- `AGENT_WEB_TOOL_REFRESH_INTERVAL`: refresh web tool notes every N turns (default `2`)
 - `MAX_TURN_CHARS`: max characters stored per generated turn after normalization (default `1400`)
 - `RATE_LIMIT_WINDOW_MS`: API rate limit window in milliseconds (default `60000`)
 - `RATE_LIMIT_MAX_REQUESTS`: max API requests per client IP per window (default `180`)
@@ -109,7 +113,9 @@ Request body:
     {
       "id": "agent-a",
       "name": "Dr. Ada",
+      "persona": "Systems architect who values falsifiable claims and tradeoff clarity.",
       "style": "You are exact and systems-focused.",
+      "tools": { "webSearch": true },
       "temperature": 0.61
     },
     {

@@ -76,15 +76,32 @@ const DEFAULT_AGENTS = [
   {
     id: "agent-a",
     name: "Agent Atlas",
-    style: "You are analytical, concrete, and strategic.",
-    temperature: 0.45
+    persona:
+      "A systems strategist focused on first principles, measurable outcomes, and explicit tradeoffs.",
+    style: "Analytical, grounded, and structured. Prefer clear reasoning over rhetoric.",
+    temperature: 0.45,
+    tools: {
+      webSearch: true
+    }
   },
   {
     id: "agent-b",
     name: "Agent Nova",
-    style: "You are creative, precise, and challenge assumptions with examples.",
-    temperature: 0.72
+    persona:
+      "A creative applied thinker who pressure-tests assumptions with examples, user impact, and edge cases.",
+    style: "Conversational, vivid, and practical. Challenge weak claims with concrete alternatives.",
+    temperature: 0.72,
+    tools: {
+      webSearch: true
+    }
   }
+];
+
+const ROOM_CONTEXT_CHARTER = [
+  "You are in the same room as the other agent discussing one topic.",
+  "Listen and respond directly to what the other agent just said.",
+  "Stay in your own persona while collaborating toward clarity.",
+  "Use available tool notes when they improve factual grounding."
 ];
 
 const DISCUSSION_CHARTER = [
@@ -155,6 +172,9 @@ const CITATION_MAX_REFERENCES = readIntEnv("CITATION_MAX_REFERENCES", 4, 1, 8);
 const CITATION_REFRESH_INTERVAL = readIntEnv("CITATION_REFRESH_INTERVAL", 3, 1, 10);
 const CITATION_TIMEOUT_MS = readIntEnv("CITATION_TIMEOUT_MS", 4500, 1000, 20000);
 const CITATION_MIN_REFERENCE_CONFIDENCE = readFloatEnv("CITATION_MIN_REFERENCE_CONFIDENCE", 0.18, 0, 0.95);
+const AGENT_WEB_TOOL_ENABLED = readBoolEnv("AGENT_WEB_TOOL_ENABLED", true);
+const AGENT_WEB_TOOL_MAX_REFERENCES = readIntEnv("AGENT_WEB_TOOL_MAX_REFERENCES", 3, 1, 6);
+const AGENT_WEB_TOOL_REFRESH_INTERVAL = readIntEnv("AGENT_WEB_TOOL_REFRESH_INTERVAL", 2, 1, 10);
 const MAX_TURN_CHARS = readIntEnv("MAX_TURN_CHARS", 1400, 300, 8000);
 const RATE_LIMIT_WINDOW_MS = readIntEnv("RATE_LIMIT_WINDOW_MS", 60000, 1000, 3600000);
 const RATE_LIMIT_MAX_REQUESTS = readIntEnv("RATE_LIMIT_MAX_REQUESTS", 180, 20, 5000);
@@ -727,13 +747,169 @@ async function retrieveDebateReferences({ topic, brief, transcript }) {
   });
 }
 
-function buildReferenceBlock(references) {
+function flattenDuckTopics(topics, acc = []) {
+  for (const item of topics || []) {
+    if (Array.isArray(item?.Topics) && item.Topics.length > 0) {
+      flattenDuckTopics(item.Topics, acc);
+      continue;
+    }
+
+    const url = String(item?.FirstURL || "").trim();
+    const text = stripHtml(item?.Text || item?.Result || "");
+    if (url && text) {
+      acc.push({ url, text });
+    }
+  }
+  return acc;
+}
+
+async function retrieveDuckDuckGoReferences({ query, maxReferences }) {
+  const trimmedQuery = String(query || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 240);
+  if (!trimmedQuery) {
+    return [];
+  }
+
+  const url = new URL("https://api.duckduckgo.com/");
+  url.searchParams.set("q", trimmedQuery);
+  url.searchParams.set("format", "json");
+  url.searchParams.set("no_html", "1");
+  url.searchParams.set("no_redirect", "1");
+
+  const payload = await fetchJsonWithTimeout(url.toString(), CITATION_TIMEOUT_MS);
+  if (!payload || typeof payload !== "object") {
+    return [];
+  }
+
+  const items = [];
+  const abstractUrl = String(payload.AbstractURL || "").trim();
+  const abstractText = stripHtml(payload.AbstractText || "");
+  if (abstractUrl && abstractText) {
+    items.push({
+      title: String(payload.Heading || trimmedQuery).trim() || "Search result",
+      url: abstractUrl,
+      snippet: abstractText
+    });
+  }
+
+  const related = flattenDuckTopics(payload.RelatedTopics || []);
+  for (const item of related.slice(0, Math.max(0, maxReferences * 2))) {
+    let slugTitle = "";
+    try {
+      slugTitle = decodeURIComponent(String(item.url || "").split("/").pop() || "")
+        .replace(/_/g, " ")
+        .trim();
+    } catch {
+      slugTitle = "";
+    }
+    items.push({
+      title: slugTitle || item.text.split(" - ")[0].slice(0, 120) || "Related result",
+      url: item.url,
+      snippet: item.text.slice(0, 260)
+    });
+  }
+
+  const unique = [];
+  const seen = new Set();
+  for (const item of items) {
+    const key = String(item.url || "").toLowerCase();
+    if (!key || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    unique.push(item);
+    if (unique.length >= maxReferences) {
+      break;
+    }
+  }
+
+  return unique.map((item, index) => ({
+    id: `R${index + 1}`,
+    provider: "duckduckgo",
+    title: item.title,
+    url: item.url,
+    snippet: item.snippet,
+    confidence: Number(clamp(0.76 - index * 0.11, 0.2, 0.9).toFixed(4))
+  }));
+}
+
+function buildAgentToolQuery({ topic, brief }) {
+  const topicPart = sanitizeTopic(topic);
+  const objectivePart = sanitizeTopic(brief?.objective || "");
+  return [topicPart, objectivePart].filter(Boolean).join(" ").trim();
+}
+
+async function retrieveAgentWebReferences({ topic, brief, transcript, speaker }) {
+  if (!AGENT_WEB_TOOL_ENABLED || !speaker?.tools?.webSearch) {
+    return [];
+  }
+
+  const query = buildAgentToolQuery({ topic, brief });
+  const fallbackQuery = sanitizeTopic(
+    [topic, brief?.objective, (transcript || []).slice(-1).map((item) => item?.text).join(" ")].filter(Boolean).join(" ")
+  );
+
+  if (!query && !fallbackQuery) {
+    return [];
+  }
+
+  const fetchForQuery = async (value) => {
+    if (!value) {
+      return [];
+    }
+    const [duckResult, wikiResult] = await Promise.all([
+      retrieveDuckDuckGoReferences({
+        query: value,
+        maxReferences: AGENT_WEB_TOOL_MAX_REFERENCES
+      }).catch(() => []),
+      retrieveWikipediaReferences({
+        query: value,
+        maxReferences: AGENT_WEB_TOOL_MAX_REFERENCES
+      }).catch(() => [])
+    ]);
+    return [...duckResult, ...wikiResult];
+  };
+
+  let combined = await fetchForQuery(query);
+  if (combined.length === 0 && fallbackQuery && fallbackQuery !== query) {
+    combined = await fetchForQuery(fallbackQuery);
+  }
+
+  const unique = [];
+  const seen = new Set();
+  for (const item of combined) {
+    const url = String(item?.url || "").trim();
+    const key = url.toLowerCase();
+    if (!url || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    unique.push(item);
+    if (unique.length >= AGENT_WEB_TOOL_MAX_REFERENCES) {
+      break;
+    }
+  }
+
+  return unique.map((item, index) => ({
+    ...item,
+    id: `R${index + 1}`
+  }));
+}
+
+function buildReferenceBlock(references, mode = "exploration") {
   if (!Array.isArray(references) || references.length === 0) {
     return "Reference notes: (none available)";
   }
 
+  const header =
+    mode === "debate"
+      ? "Reference notes (cite as [R#] for factual claims):"
+      : "Web/tool notes (optional grounding, cite [R#] only if helpful):";
+
   return [
-    "Reference notes (cite as [R#] for factual claims):",
+    header,
     ...references.map((reference) =>
       `${reference.id} | ${reference.title} | conf ${Number(reference.confidence || 0).toFixed(2)} | ${reference.url} | ${reference.snippet}`
     )
@@ -821,6 +997,27 @@ function stripDonePrefix(text) {
     .trim();
 }
 
+function getPartnerAgent(agents, speaker) {
+  const list = Array.isArray(agents) ? agents : [];
+  const partner = list.find((item) => item && item.id !== speaker?.id);
+  return partner || null;
+}
+
+function buildRoomContextBlock({ topic, mode, brief, speaker, partner }) {
+  const lines = [
+    "Room context:",
+    ROOM_CONTEXT_CHARTER.map((line) => `- ${line}`).join("\n"),
+    `Topic in room: ${topic}`,
+    `Conversation mode: ${mode}`,
+    `Your persona: ${speaker?.persona || speaker?.style || "Focused collaborator."}`,
+    `Counterpart persona: ${partner?.name || "Other agent"} | ${partner?.persona || partner?.style || "N/A"}`,
+    `Objective: ${brief?.objective || "(none)"}`,
+    `Tools available to you: ${speaker?.tools?.webSearch ? "web_search" : "none"}`
+  ];
+
+  return lines.join("\n");
+}
+
 function turnTakingContextBlock(topic, transcript) {
   const previous = transcript[transcript.length - 1];
   if (!previous) {
@@ -841,9 +1038,10 @@ function turnTakingContextBlock(topic, transcript) {
   ].join("\n");
 }
 
-function localTurn(topic, transcript, moderatorDirective, brief, mode = "exploration", references = []) {
+function localTurn(topic, speaker, transcript, moderatorDirective, brief, mode = "exploration", references = []) {
   const previous = transcript[transcript.length - 1];
   const objectiveHint = brief?.objective ? compactLine(brief.objective, 90) : "";
+  const isAtlas = speaker?.id === "agent-a";
   const nudgesByMode = {
     exploration: [
       "A practical next step is to test one small version of this idea.",
@@ -865,29 +1063,42 @@ function localTurn(topic, transcript, moderatorDirective, brief, mode = "explora
   const modeNudge = modeNudges[transcript.length % modeNudges.length];
 
   if (!previous) {
-    const openers = [
-      `My first view on ${topic} is that strong outcomes usually come from a small set of consistent choices over time. ${modeNudge}`,
-      `On ${topic}, I think progress comes from clear commitments, not abstract principles alone. ${modeNudge}`,
-      `For ${topic}, I'd frame it as an evolving process: test, learn, and refine as new evidence appears. ${modeNudge}`
-    ];
+    const openers = isAtlas
+      ? [
+          `My first read on ${topic} is that progress usually comes from a few consistent choices made over time. ${modeNudge}`,
+          `On ${topic}, I would start by defining what success looks like and what would falsify our current view. ${modeNudge}`,
+          `For ${topic}, I see this as a system of tradeoffs, not a single claim, so we should test the highest-leverage assumption first. ${modeNudge}`
+        ]
+      : [
+          `My first take on ${topic} is that people's lived context matters as much as abstract logic. ${modeNudge}`,
+          `On ${topic}, I want to keep this grounded in real-world examples and user impact, not just theory. ${modeNudge}`,
+          `For ${topic}, I'd frame this as a conversation between values and evidence, then iterate toward what holds up in practice. ${modeNudge}`
+        ];
     const line = openers[transcript.length % openers.length];
     return objectiveHint ? `${line} A useful constraint is: ${objectiveHint}.` : line;
   }
 
-  const responses = [
-    `I see your point, and the part that stands out is the practical framing. ${modeNudge}`,
-    `That tracks for me, but the assumption I'd challenge is how we define success in this context. ${modeNudge}`,
-    `You're pointing at something real there. I would make it sharper by tying it to one measurable signal. ${modeNudge}`
-  ];
+  const responses = isAtlas
+    ? [
+        `I follow your point, and the key part for me is how we can verify it with evidence. ${modeNudge}`,
+        `That makes sense, but I'd challenge the hidden assumption before we commit to it. ${modeNudge}`,
+        `Good direction. I would tighten this by linking it to one measurable signal. ${modeNudge}`
+      ]
+    : [
+        `I see where you're going, and I like the framing. ${modeNudge}`,
+        `That resonates, but I think we should test it against a concrete edge case. ${modeNudge}`,
+        `You're onto something; I'd make it more practical by anchoring it in one real example. ${modeNudge}`
+      ];
   const line = responses[transcript.length % responses.length];
   return objectiveHint ? `${line} We should keep the objective in frame: ${objectiveHint}.` : line;
 }
 
-async function generateTurn({ topic, speaker, transcript, memory, moderatorDirective, brief, mode, references }) {
+async function generateTurn({ topic, speaker, agents, transcript, memory, moderatorDirective, brief, mode, references }) {
   if (!client) {
-    return localTurn(topic, transcript, moderatorDirective, brief, mode, references);
+    return localTurn(topic, speaker, transcript, moderatorDirective, brief, mode, references);
   }
 
+  const partner = getPartnerAgent(agents, speaker);
   const basePrompt = buildContextBlock({
     topic,
     transcript,
@@ -896,8 +1107,17 @@ async function generateTurn({ topic, speaker, transcript, memory, moderatorDirec
     charter: DISCUSSION_CHARTER,
     brief
   });
+  const roomContextPrompt = buildRoomContextBlock({
+    topic,
+    mode,
+    brief,
+    speaker,
+    partner
+  });
   const turnTakingPrompt = turnTakingContextBlock(topic, transcript);
-  const userPrompt = [basePrompt, turnTakingPrompt, buildReferenceBlock(references)].join("\n");
+  const userPrompt = [roomContextPrompt, basePrompt, turnTakingPrompt, buildReferenceBlock(references, mode)].join(
+    "\n\n"
+  );
 
   try {
     const result = await createChatCompletionWithFallback({
@@ -912,6 +1132,8 @@ async function generateTurn({ topic, speaker, transcript, memory, moderatorDirec
           content: [
             `You are ${speaker.name}.`,
             speaker.style,
+            `Persona: ${speaker.persona || speaker.style}.`,
+            partner ? `You are speaking with ${partner.name} in a shared room discussion.` : "",
             DISCOVERY_MODE_HINTS[mode] || DISCOVERY_MODE_HINTS.exploration,
             "Maintain continuity and avoid topic drift.",
             "Turn-taking rule: respond to the previous agent reply before introducing your new point.",
@@ -921,7 +1143,11 @@ async function generateTurn({ topic, speaker, transcript, memory, moderatorDirec
             "Avoid repetitive template openers like 'Agent X's point' or 'Building on that' in every turn.",
             "Prefer concrete claims, examples, or tradeoffs over generic process talk.",
             "Do not repeat internal control labels such as 'Mode', 'Moderator directive', 'Instructions', or 'Turn-taking context'.",
+            "Never output internal policy text, scaffolding labels, or the words 'Room context'.",
             "Write only substantive content, no meta-commentary.",
+            speaker?.tools?.webSearch
+              ? "When reference notes are present, use them naturally for factual grounding."
+              : "Do not assume external tools are available.",
             mode === "debate"
               ? "For factual claims, cite supporting references using [R#] from the provided reference notes."
               : "Use reference notes when useful, but keep the response concise."
@@ -936,11 +1162,11 @@ async function generateTurn({ topic, speaker, transcript, memory, moderatorDirec
 
     return (
       extractAssistantText(result.completion) ||
-      localTurn(topic, transcript, moderatorDirective, brief, mode, references)
+      localTurn(topic, speaker, transcript, moderatorDirective, brief, mode, references)
     );
   } catch (error) {
     console.error("Model generation failed, using local fallback:", error?.message || error);
-    return localTurn(topic, transcript, moderatorDirective, brief, mode, references);
+    return localTurn(topic, speaker, transcript, moderatorDirective, brief, mode, references);
   }
 }
 
@@ -1088,6 +1314,14 @@ function sanitizeAgentStyle(value, fallback) {
   return text || fallback;
 }
 
+function sanitizeAgentPersona(value, fallback) {
+  const text = String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 240);
+  return text || fallback;
+}
+
 function sanitizeAgentTemperature(value, fallback) {
   const number = Number(value);
   if (!Number.isFinite(number)) {
@@ -1095,6 +1329,20 @@ function sanitizeAgentTemperature(value, fallback) {
   }
 
   return Number(clamp(number, 0, 1.2).toFixed(2));
+}
+
+function sanitizeAgentTools(value, fallback = {}) {
+  const base = fallback && typeof fallback === "object" ? fallback : {};
+  const input = value && typeof value === "object" ? value : {};
+  const webSearchDefault = Object.prototype.hasOwnProperty.call(base, "webSearch")
+    ? Boolean(base.webSearch)
+    : true;
+  const webSearch = Object.prototype.hasOwnProperty.call(input, "webSearch")
+    ? Boolean(input.webSearch)
+    : webSearchDefault;
+  return {
+    webSearch
+  };
 }
 
 function hasAgentPayload(body) {
@@ -1113,11 +1361,17 @@ function parseAgentConfigFromBody(body) {
       name: Object.prototype.hasOwnProperty.call(agent, "name")
         ? sanitizeAgentName(agent.name, "")
         : undefined,
+      persona: Object.prototype.hasOwnProperty.call(agent, "persona")
+        ? sanitizeAgentPersona(agent.persona, "")
+        : undefined,
       style: Object.prototype.hasOwnProperty.call(agent, "style")
         ? sanitizeAgentStyle(agent.style, "")
         : undefined,
       temperature: Object.prototype.hasOwnProperty.call(agent, "temperature")
         ? sanitizeAgentTemperature(agent.temperature, 0.6)
+        : undefined,
+      tools: Object.prototype.hasOwnProperty.call(agent, "tools")
+        ? sanitizeAgentTools(agent.tools, {})
         : undefined
     }))
     .filter((agent) => agent.agentId === "agent-a" || agent.agentId === "agent-b");
@@ -1125,12 +1379,15 @@ function parseAgentConfigFromBody(body) {
 
 function normalizeAgentRow(agentId, input) {
   const fallback = DEFAULT_AGENTS.find((item) => item.id === agentId);
+  const fallbackTools = sanitizeAgentTools(fallback?.tools || {}, { webSearch: true });
   return {
     agentId,
     id: agentId,
     name: sanitizeAgentName(input?.name, fallback?.name || "Agent"),
+    persona: sanitizeAgentPersona(input?.persona, fallback?.persona || "Focused and rigorous collaborator."),
     style: sanitizeAgentStyle(input?.style, fallback?.style || "Stay focused and useful."),
-    temperature: sanitizeAgentTemperature(input?.temperature, fallback?.temperature || 0.6)
+    temperature: sanitizeAgentTemperature(input?.temperature, fallback?.temperature || 0.6),
+    tools: sanitizeAgentTools(input?.tools, fallbackTools)
   };
 }
 
@@ -1153,8 +1410,10 @@ function mergeAgentConfig(existingAgents, incomingAgents) {
 
     return normalizeAgentRow(current.agentId, {
       name: incoming.name ?? current.name,
+      persona: incoming.persona ?? current.persona,
       style: incoming.style ?? current.style,
-      temperature: incoming.temperature ?? current.temperature
+      temperature: incoming.temperature ?? current.temperature,
+      tools: incoming.tools ?? current.tools
     });
   });
 }
@@ -1774,6 +2033,7 @@ async function runConversationBatch({
   const startedAt = Date.now();
   const qualityKeywordSet = getQualityKeywordSet(topic, brief);
   const citationMode = mode === "debate" && CITATION_RETRIEVAL_ENABLED;
+  const agentToolMode = AGENT_WEB_TOOL_ENABLED;
   let activeReferences = Array.isArray(references) ? references.filter((item) => item?.id) : [];
   const citedClaims = [];
   const modeDefaultDirective =
@@ -1807,6 +2067,8 @@ async function runConversationBatch({
     const activeAgents = agents && agents.length ? agents : DEFAULT_AGENTS;
     const speaker = activeAgents[(nextTurn - 1) % activeAgents.length];
     const previous = transcript[transcript.length - 1];
+    const speakerCanSearch = Boolean(agentToolMode && speaker?.tools?.webSearch);
+    const referenceRefreshInterval = citationMode ? CITATION_REFRESH_INTERVAL : AGENT_WEB_TOOL_REFRESH_INTERVAL;
     let referenceMap = new Map(
       activeReferences
         .filter((item) => item?.id)
@@ -1814,15 +2076,22 @@ async function runConversationBatch({
     );
 
     if (
-      citationMode &&
-      (i === 0 || i % CITATION_REFRESH_INTERVAL === 0 || activeReferences.length === 0)
+      (citationMode || speakerCanSearch) &&
+      (i === 0 || i % referenceRefreshInterval === 0 || activeReferences.length === 0)
     ) {
       try {
-        const retrieved = await retrieveDebateReferences({
-          topic,
-          brief,
-          transcript
-        });
+        const retrieved = citationMode
+          ? await retrieveDebateReferences({
+              topic,
+              brief,
+              transcript
+            })
+          : await retrieveAgentWebReferences({
+              topic,
+              brief,
+              transcript,
+              speaker
+            });
         if (retrieved.length > 0) {
           activeReferences = retrieved;
           referenceMap = new Map(retrieved.map((item) => [String(item.id).toUpperCase(), item]));
@@ -1864,6 +2133,7 @@ async function runConversationBatch({
         topic,
         mode,
         speaker,
+        agents: activeAgents,
         transcript,
         memory,
         moderatorDirective: attemptDirective,
@@ -1965,7 +2235,7 @@ async function runConversationBatch({
           accepted,
           repetitionStreak
         },
-        references: citationMode ? activeReferences : []
+        references: citationMode || speakerCanSearch ? activeReferences : []
       });
     }
 
@@ -2022,13 +2292,14 @@ async function runConversationBatch({
       evaluatorRetries,
       turnsEvaluated: qualityTurns,
       citationMode,
+      agentToolMode,
       citedTurns: citationTurnCount,
       citedClaims: citationClaimCount,
       citationConfidenceAvg: Number(
         (citationClaimCount > 0 ? citationConfidenceTotal / citationClaimCount : 0).toFixed(4)
       )
     },
-    references: citationMode ? activeReferences : []
+    references: citationMode || agentToolMode ? activeReferences : []
   };
 }
 
@@ -2545,9 +2816,15 @@ app.post("/api/conversation/stream", async (req, res) => {
         },
         citations: {
           enabled: mode === "debate" && CITATION_RETRIEVAL_ENABLED,
-          provider: "wikipedia",
+          provider: "wikipedia+duckduckgo",
           maxReferences: CITATION_MAX_REFERENCES,
           refreshInterval: CITATION_REFRESH_INTERVAL
+        },
+        tools: {
+          roomContext: true,
+          webSearch: AGENT_WEB_TOOL_ENABLED,
+          webSearchMaxReferences: AGENT_WEB_TOOL_MAX_REFERENCES,
+          webSearchRefreshInterval: AGENT_WEB_TOOL_REFRESH_INTERVAL
         }
       }
     });
