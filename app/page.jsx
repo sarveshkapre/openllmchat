@@ -4,14 +4,15 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Moon, PanelLeft, PanelLeftClose, Plus, RefreshCcw, Sun, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
 const STORAGE_KEYS = {
   conversationId: "openllmchat:min:conversationId",
   topic: "openllmchat:min:topic",
-  theme: "openllmchat:min:theme"
+  theme: "openllmchat:min:theme",
+  sidebarOpen: "openllmchat:min:sidebarOpen"
 };
 
 function parseTurns(value) {
@@ -115,6 +116,10 @@ export default function HomePage() {
   useEffect(() => {
     const savedTheme = localStorage.getItem(STORAGE_KEYS.theme) || "light";
     applyTheme(savedTheme);
+    const savedSidebarOpen = localStorage.getItem(STORAGE_KEYS.sidebarOpen);
+    if (savedSidebarOpen !== null) {
+      setHistoryOpen(savedSidebarOpen === "1");
+    }
 
     const savedTopic = localStorage.getItem(STORAGE_KEYS.topic) || "";
     const savedConversationId = localStorage.getItem(STORAGE_KEYS.conversationId) || "";
@@ -144,6 +149,10 @@ export default function HomePage() {
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.topic, topic);
   }, [topic]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.sidebarOpen, historyOpen ? "1" : "0");
+  }, [historyOpen]);
 
   const runConversation = useCallback(async () => {
     const cleanTopic = topic.trim();
@@ -294,163 +303,192 @@ export default function HomePage() {
 
   const historyStatus = useMemo(() => {
     if (historyLoading) {
-      return "Loading threads...";
+      return "Loading conversations...";
     }
-    return `${conversations.length} threads`;
+    return `${conversations.length} conversations`;
   }, [conversations.length, historyLoading]);
 
   return (
     <main className="min-h-screen bg-background">
-      <div className="container py-6 md:py-10">
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h1 className="text-2xl font-semibold tracking-tight">openllmchat</h1>
-            <p className="text-sm text-muted-foreground">Two agents, one focused conversation.</p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button
-              variant="secondary"
-              size="icon"
-              aria-label={historyOpen ? "Collapse sidebar" : "Expand sidebar"}
-              onClick={() => setHistoryOpen((open) => !open)}
-            >
-              {historyOpen ? <PanelLeftClose className="size-4" /> : <PanelLeft className="size-4" />}
-            </Button>
-            <Button
-              variant="secondary"
-              size="icon"
-              aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
-              onClick={() => applyTheme(theme === "dark" ? "light" : "dark")}
-            >
-              {theme === "dark" ? <Sun className="size-4" /> : <Moon className="size-4" />}
-            </Button>
-            <Button variant="secondary" onClick={onNewThread}>
-              <Plus className="size-4" />
-              New thread
-            </Button>
-          </div>
-        </div>
-
-        <div className={cn("grid gap-4", historyOpen ? "lg:grid-cols-[290px,1fr]" : "lg:grid-cols-1")}>
-          {historyOpen ? (
-            <Card className="h-[76vh] min-h-[520px] overflow-hidden">
-              <CardHeader className="border-b pb-4">
-                <div className="flex items-center justify-between gap-2">
-                  <CardTitle className="text-base">Saved conversations</CardTitle>
-                  <div className="flex items-center gap-1">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      aria-label="Refresh conversation history"
-                      onClick={loadHistory}
-                      disabled={historyLoading || historyClearing}
-                    >
-                      <RefreshCcw className={cn("size-4", historyLoading && "animate-spin")} />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      aria-label="Delete all saved conversations"
-                      onClick={onClearHistory}
-                      disabled={historyLoading || historyClearing || conversations.length === 0}
-                    >
-                      <Trash2 className={cn("size-4", historyClearing && "animate-pulse")} />
-                    </Button>
-                  </div>
-                </div>
+      <div className="flex min-h-screen">
+        <aside
+          className={cn(
+            "hidden border-r bg-card/60 transition-all duration-200 ease-out md:flex md:flex-col",
+            historyOpen ? "md:w-[300px]" : "md:w-16"
+          )}
+        >
+          <div className={cn("border-b p-3", historyOpen ? "space-y-3" : "space-y-2")}>
+            <div className={cn("flex items-center", historyOpen ? "justify-between" : "justify-center")}>
+              {historyOpen ? <p className="text-sm font-medium text-foreground">Saved conversations</p> : null}
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label={historyOpen ? "Collapse sidebar" : "Expand sidebar"}
+                onClick={() => setHistoryOpen((open) => !open)}
+              >
+                {historyOpen ? <PanelLeftClose className="size-4" /> : <PanelLeft className="size-4" />}
+              </Button>
+            </div>
+            {historyOpen ? (
+              <>
                 <CardDescription>{historyStatus}</CardDescription>
+                <div className="flex items-center gap-1">
+                  <Button variant="secondary" className="flex-1" onClick={onNewThread}>
+                    <Plus className="size-4" />
+                    New conversation
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label="Refresh conversation history"
+                    onClick={loadHistory}
+                    disabled={historyLoading || historyClearing}
+                  >
+                    <RefreshCcw className={cn("size-4", historyLoading && "animate-spin")} />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label="Delete all saved conversations"
+                    onClick={onClearHistory}
+                    disabled={historyLoading || historyClearing || conversations.length === 0}
+                  >
+                    <Trash2 className={cn("size-4", historyClearing && "animate-pulse")} />
+                  </Button>
+                </div>
+              </>
+            ) : (
+              <div className="flex flex-col items-center gap-2">
+                <Button variant="ghost" size="icon" onClick={onNewThread} aria-label="New conversation">
+                  <Plus className="size-4" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Refresh conversation history"
+                  onClick={loadHistory}
+                  disabled={historyLoading || historyClearing}
+                >
+                  <RefreshCcw className={cn("size-4", historyLoading && "animate-spin")} />
+                </Button>
+              </div>
+            )}
+          </div>
+
+          {historyOpen ? (
+            <div className="thread-scroll flex-1 overflow-y-auto p-2">
+              {conversations.length === 0 ? (
+                <p className="rounded-md px-3 py-2 text-sm text-muted-foreground">No conversations yet.</p>
+              ) : (
+                <ul className="space-y-1">
+                  {conversations.map((conversation) => {
+                    const isActive = conversation.id === activeConversationId;
+                    return (
+                      <li key={conversation.id}>
+                        <button
+                          type="button"
+                          onClick={() => loadConversation(conversation.id).catch((error) => setStatus(error.message))}
+                          className={cn(
+                            "w-full rounded-md border px-3 py-2 text-left transition-colors",
+                            isActive
+                              ? "border-primary/40 bg-primary/10"
+                              : "border-transparent hover:border-border hover:bg-muted/55"
+                          )}
+                        >
+                          <p className="truncate text-sm font-medium">{conversation.title || conversation.topic}</p>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {conversation.totalTurns || 0} turns · {formatUpdatedAt(conversation.updatedAt)}
+                          </p>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          ) : (
+            <div className="flex-1" />
+          )}
+        </aside>
+
+        <section className="flex-1 p-4 md:p-6">
+          <div className="mx-auto max-w-5xl">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h1 className="text-2xl font-semibold tracking-tight">openllmchat</h1>
+                <p className="text-sm text-muted-foreground">Two agents, one focused conversation.</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="secondary"
+                  size="icon"
+                  aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+                  onClick={() => applyTheme(theme === "dark" ? "light" : "dark")}
+                >
+                  {theme === "dark" ? <Sun className="size-4" /> : <Moon className="size-4" />}
+                </Button>
+              </div>
+            </div>
+
+            <Card className="h-[78vh] min-h-[540px] overflow-hidden">
+              <CardHeader className="border-b pb-4">
+                <form
+                  className="grid gap-3 md:grid-cols-[1fr,120px,auto]"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    if (!isRunning) {
+                      runConversation();
+                    }
+                  }}
+                >
+                  <Input
+                    value={topic}
+                    onChange={(event) => setTopic(event.target.value)}
+                    placeholder="Topic"
+                    maxLength={180}
+                    aria-label="Conversation topic"
+                  />
+                  <Input
+                    type="number"
+                    min={2}
+                    max={10}
+                    value={turnsInput}
+                    onChange={(event) => setTurnsInput(event.target.value)}
+                    aria-label="Turns"
+                  />
+                  <Button type="submit" disabled={isRunning}>
+                    {isRunning ? "Running..." : "Start conversation"}
+                  </Button>
+                </form>
+                <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+                  <span>Engine: {engine}</span>
+                  <span>Turns: {totalTurns}</span>
+                  <span>{status}</span>
+                </div>
               </CardHeader>
-              <CardContent className="thread-scroll h-[calc(76vh-88px)] overflow-y-auto p-2">
-                {conversations.length === 0 ? (
-                  <p className="rounded-md px-3 py-2 text-sm text-muted-foreground">No threads yet.</p>
+              <CardContent className="thread-scroll h-[calc(78vh-122px)] overflow-y-auto p-4 md:p-5">
+                {messages.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No messages yet. Add a topic and start.</p>
                 ) : (
-                  <ul className="space-y-1">
-                    {conversations.map((conversation) => {
-                      const isActive = conversation.id === activeConversationId;
-                      return (
-                        <li key={conversation.id}>
-                          <button
-                            type="button"
-                            onClick={() => loadConversation(conversation.id).catch((error) => setStatus(error.message))}
-                            className={cn(
-                              "w-full rounded-md border px-3 py-2 text-left transition-colors",
-                              isActive
-                                ? "border-primary/40 bg-primary/10"
-                                : "border-transparent hover:border-border hover:bg-muted/55"
-                            )}
-                          >
-                            <p className="truncate text-sm font-medium">{conversation.title || conversation.topic}</p>
-                            <p className="mt-1 text-xs text-muted-foreground">
-                              {conversation.totalTurns || 0} turns · {formatUpdatedAt(conversation.updatedAt)}
-                            </p>
-                          </button>
-                        </li>
-                      );
-                    })}
+                  <ul className="space-y-3">
+                    {messages.map((entry, index) => (
+                      <li key={`${entry.turn}-${index}`} className="rounded-md border bg-muted/30 px-4 py-3">
+                        <div className="mb-2 flex items-center justify-between gap-3">
+                          <p className="text-sm font-semibold">{entry.speaker || "Agent"}</p>
+                          <p className="font-mono text-xs text-muted-foreground">
+                            Turn {Number(entry.turn || index + 1)}
+                          </p>
+                        </div>
+                        <p className="text-sm leading-6 text-foreground/95">{entry.text || ""}</p>
+                      </li>
+                    ))}
                   </ul>
                 )}
               </CardContent>
             </Card>
-          ) : null}
-
-          <Card className="h-[76vh] min-h-[520px] overflow-hidden">
-            <CardHeader className="border-b pb-4">
-              <form
-                className="grid gap-3 md:grid-cols-[1fr,120px,auto]"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  if (!isRunning) {
-                    runConversation();
-                  }
-                }}
-              >
-                <Input
-                  value={topic}
-                  onChange={(event) => setTopic(event.target.value)}
-                  placeholder="Topic"
-                  maxLength={180}
-                  aria-label="Conversation topic"
-                />
-                <Input
-                  type="number"
-                  min={2}
-                  max={10}
-                  value={turnsInput}
-                  onChange={(event) => setTurnsInput(event.target.value)}
-                  aria-label="Turns"
-                />
-                <Button type="submit" disabled={isRunning}>
-                  {isRunning ? "Running..." : "Start conversation"}
-                </Button>
-              </form>
-              <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-                <span>Engine: {engine}</span>
-                <span>Turns: {totalTurns}</span>
-                <span>{status}</span>
-              </div>
-            </CardHeader>
-            <CardContent className="thread-scroll h-[calc(76vh-122px)] overflow-y-auto p-4 md:p-5">
-              {messages.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No messages yet. Add a topic and start.</p>
-              ) : (
-                <ul className="space-y-3">
-                  {messages.map((entry, index) => (
-                    <li key={`${entry.turn}-${index}`} className="rounded-md border bg-muted/30 px-4 py-3">
-                      <div className="mb-2 flex items-center justify-between gap-3">
-                        <p className="text-sm font-semibold">{entry.speaker || "Agent"}</p>
-                        <p className="font-mono text-xs text-muted-foreground">
-                          Turn {Number(entry.turn || index + 1)}
-                        </p>
-                      </div>
-                      <p className="text-sm leading-6 text-foreground/95">{entry.text || ""}</p>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </CardContent>
-          </Card>
+          </div>
+          </section>
         </div>
-      </div>
     </main>
   );
 }
