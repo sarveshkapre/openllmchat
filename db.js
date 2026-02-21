@@ -13,6 +13,8 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS conversations (
     id TEXT PRIMARY KEY,
     topic TEXT NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    starred INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
@@ -108,15 +110,21 @@ function ensureColumnExists(tableName, columnName, typeSql) {
 
 ensureColumnExists("conversations", "parent_conversation_id", "TEXT");
 ensureColumnExists("conversations", "fork_from_turn", "INTEGER");
+ensureColumnExists("conversations", "title", "TEXT NOT NULL DEFAULT ''");
+ensureColumnExists("conversations", "starred", "INTEGER NOT NULL DEFAULT 0");
 db.exec(`
   CREATE INDEX IF NOT EXISTS idx_conversations_parent
     ON conversations(parent_conversation_id, fork_from_turn);
+  CREATE INDEX IF NOT EXISTS idx_conversations_starred_updated
+    ON conversations(starred DESC, updated_at DESC);
 `);
 
 const getConversationStmt = db.prepare(`
   SELECT
     id,
     topic,
+    title,
+    starred,
     parent_conversation_id AS parentConversationId,
     fork_from_turn AS forkFromTurn,
     created_at AS createdAt,
@@ -168,6 +176,8 @@ const listConversationsStmt = db.prepare(`
   SELECT
     c.id,
     c.topic,
+    c.title,
+    c.starred,
     c.parent_conversation_id AS parentConversationId,
     c.fork_from_turn AS forkFromTurn,
     c.created_at AS createdAt,
@@ -186,8 +196,17 @@ const listConversationsStmt = db.prepare(`
   LEFT JOIN conversation_briefs b ON b.conversation_id = c.id
   LEFT JOIN conversation_agents a ON a.conversation_id = c.id
   GROUP BY c.id
-  ORDER BY c.updated_at DESC
+  ORDER BY c.starred DESC, c.updated_at DESC
   LIMIT ?
+`);
+
+const updateConversationMetaStmt = db.prepare(`
+  UPDATE conversations
+  SET
+    title = @title,
+    starred = @starred,
+    updated_at = CURRENT_TIMESTAMP
+  WHERE id = @conversationId
 `);
 
 const getConversationBriefStmt = db.prepare(`
@@ -448,7 +467,15 @@ const upsertConversationAgentsTx = db.transaction((conversationId, agents) => {
 });
 
 function getConversation(conversationId) {
-  return getConversationStmt.get(conversationId) || null;
+  const row = getConversationStmt.get(conversationId);
+  if (!row) {
+    return null;
+  }
+
+  return {
+    ...row,
+    starred: Boolean(row.starred)
+  };
 }
 
 function createConversation(conversationId, topic, options = {}) {
@@ -485,6 +512,7 @@ function listConversations(limit = 20) {
   const safeLimit = Math.min(100, Math.max(1, Number(limit) || 20));
   return listConversationsStmt.all(safeLimit).map((row) => ({
     ...row,
+    starred: Boolean(row.starred),
     hasBrief: Boolean(row.hasBrief),
     hasCustomAgents: Boolean(row.hasCustomAgents)
   }));
@@ -507,6 +535,14 @@ function upsertConversationBrief(conversationId, brief) {
     objective: brief.objective || "",
     constraintsText: brief.constraintsText || "",
     doneCriteria: brief.doneCriteria || ""
+  });
+}
+
+function updateConversationMeta(conversationId, meta) {
+  updateConversationMetaStmt.run({
+    conversationId,
+    title: meta.title || "",
+    starred: meta.starred ? 1 : 0
   });
 }
 
@@ -605,6 +641,7 @@ export {
   listConversations,
   pruneMemoryTokens,
   pruneSemanticItems,
+  updateConversationMeta,
   upsertConversationBrief,
   upsertConversationAgents,
   upsertMemoryTokens,

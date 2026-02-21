@@ -14,6 +14,7 @@ import {
   getMessagesUpToTurn,
   insertMessages,
   listConversations,
+  updateConversationMeta,
   upsertConversationAgents,
   upsertConversationBrief
 } from "./db.js";
@@ -313,6 +314,66 @@ function mergeBriefPatch(currentBrief, body, parsedBrief) {
   };
 }
 
+function sanitizeConversationTitle(value, fallback = "") {
+  const text = String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 96);
+  return text || fallback;
+}
+
+function sanitizeConversationStarred(value, fallback = false) {
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  if (typeof value === "number") {
+    return value !== 0;
+  }
+
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["1", "true", "yes", "on"].includes(normalized)) {
+      return true;
+    }
+    if (["0", "false", "no", "off"].includes(normalized)) {
+      return false;
+    }
+  }
+
+  return fallback;
+}
+
+function hasConversationMetaPayload(body) {
+  if (!body || typeof body !== "object") {
+    return false;
+  }
+
+  return ["title", "starred"].some((key) => Object.prototype.hasOwnProperty.call(body, key));
+}
+
+function parseConversationMetaFromBody(body) {
+  return {
+    title: Object.prototype.hasOwnProperty.call(body || {}, "title")
+      ? sanitizeConversationTitle(body.title, "")
+      : undefined,
+    starred: Object.prototype.hasOwnProperty.call(body || {}, "starred")
+      ? sanitizeConversationStarred(body.starred, false)
+      : undefined
+  };
+}
+
+function mergeConversationMeta(currentConversation, body, parsedMeta) {
+  return {
+    title: Object.prototype.hasOwnProperty.call(body || {}, "title")
+      ? parsedMeta.title
+      : sanitizeConversationTitle(currentConversation?.title || "", ""),
+    starred: Object.prototype.hasOwnProperty.call(body || {}, "starred")
+      ? parsedMeta.starred
+      : sanitizeConversationStarred(currentConversation?.starred, false)
+  };
+}
+
 function sanitizeAgentName(value, fallback) {
   const text = String(value || "")
     .replace(/\s+/g, " ")
@@ -528,8 +589,10 @@ async function resolveConversation(body) {
   const requestedConversationId = String(body?.conversationId || "").trim();
   const requestedBrief = parseBriefFromBody(body);
   const requestedAgents = parseAgentConfigFromBody(body);
+  const requestedMeta = parseConversationMetaFromBody(body);
   const shouldUpdateBrief = hasBriefPayload(body);
   const shouldUpdateAgents = hasAgentPayload(body);
+  const shouldUpdateMeta = hasConversationMetaPayload(body);
 
   let conversation = null;
   if (requestedConversationId) {
@@ -554,6 +617,14 @@ async function resolveConversation(body) {
   if (!conversation) {
     createConversation(conversationId, topic);
   }
+  const currentConversation = getConversation(conversationId);
+  if (shouldUpdateMeta) {
+    updateConversationMeta(
+      conversationId,
+      mergeConversationMeta(currentConversation, body, requestedMeta)
+    );
+  }
+  const updatedConversation = getConversation(conversationId);
 
   const existingBrief = getConversationBrief(conversationId);
   if (shouldUpdateBrief) {
@@ -581,6 +652,8 @@ async function resolveConversation(body) {
   return {
     conversationId,
     topic,
+    title: updatedConversation?.title || "",
+    starred: Boolean(updatedConversation?.starred),
     brief,
     agents,
     transcript,
@@ -786,6 +859,8 @@ app.get("/api/conversation/:id", (req, res) => {
   return res.json({
     conversationId,
     topic: conversation.topic,
+    title: conversation.title || "",
+    starred: Boolean(conversation.starred),
     parentConversationId: conversation.parentConversationId || null,
     forkFromTurn: Number.isFinite(conversation.forkFromTurn) ? conversation.forkFromTurn : null,
     brief,
@@ -820,6 +895,13 @@ app.post("/api/conversation/:id/fork", async (req, res) => {
       parentConversationId: sourceConversationId,
       forkFromTurn
     });
+    const sourceTitle = sanitizeConversationTitle(sourceConversation.title, sourceConversation.topic);
+    const forkTitle = sanitizeConversationTitle(`${sourceTitle} (Fork)`, sourceConversation.topic);
+    updateConversationMeta(forkConversationId, {
+      title: forkTitle,
+      starred: false
+    });
+    const forkConversation = getConversation(forkConversationId);
 
     const sourceBrief = getConversationBrief(sourceConversationId);
     upsertConversationBrief(forkConversationId, sourceBrief);
@@ -853,6 +935,8 @@ app.post("/api/conversation/:id/fork", async (req, res) => {
     return res.json({
       conversationId: forkConversationId,
       topic: sourceConversation.topic,
+      title: forkConversation?.title || forkTitle,
+      starred: Boolean(forkConversation?.starred),
       brief: sourceBrief,
       agents: sourceAgents,
       parentConversationId: sourceConversationId,
@@ -881,6 +965,8 @@ app.get("/api/conversation/:id/brief", (req, res) => {
   return res.json({
     conversationId,
     topic: conversation.topic,
+    title: conversation.title || "",
+    starred: Boolean(conversation.starred),
     brief: getConversationBrief(conversationId)
   });
 });
@@ -899,6 +985,8 @@ app.get("/api/conversation/:id/agents", (req, res) => {
   return res.json({
     conversationId,
     topic: conversation.topic,
+    title: conversation.title || "",
+    starred: Boolean(conversation.starred),
     agents: mapStoredAgents(getConversationAgents(conversationId))
   });
 });
@@ -921,7 +1009,33 @@ app.post("/api/conversation/:id/agents", (req, res) => {
   return res.json({
     conversationId,
     topic: conversation.topic,
+    title: conversation.title || "",
+    starred: Boolean(conversation.starred),
     agents: mapStoredAgents(getConversationAgents(conversationId))
+  });
+});
+
+app.post("/api/conversation/:id/meta", (req, res) => {
+  const conversationId = String(req.params.id || "").trim();
+  if (!conversationId) {
+    return res.status(400).json({ error: "Conversation id is required." });
+  }
+
+  const conversation = getConversation(conversationId);
+  if (!conversation) {
+    return res.status(404).json({ error: "Conversation not found." });
+  }
+
+  const parsedMeta = parseConversationMetaFromBody(req.body);
+  const mergedMeta = mergeConversationMeta(conversation, req.body || {}, parsedMeta);
+  updateConversationMeta(conversationId, mergedMeta);
+  const updatedConversation = getConversation(conversationId);
+
+  return res.json({
+    conversationId,
+    topic: updatedConversation.topic,
+    title: updatedConversation.title || "",
+    starred: Boolean(updatedConversation.starred)
   });
 });
 
@@ -944,6 +1058,8 @@ app.post("/api/conversation/:id/brief", (req, res) => {
   return res.json({
     conversationId,
     topic: conversation.topic,
+    title: conversation.title || "",
+    starred: Boolean(conversation.starred),
     brief: getConversationBrief(conversationId)
   });
 });
@@ -965,6 +1081,8 @@ app.get("/api/conversation/:id/memory", (req, res) => {
   return res.json({
     conversationId,
     topic: conversation.topic,
+    title: conversation.title || "",
+    starred: Boolean(conversation.starred),
     brief,
     agents,
     memory
@@ -985,7 +1103,7 @@ app.post("/api/conversation/stream", async (req, res) => {
       return res.status(setup.status).json({ error: setup.error });
     }
 
-    const { conversationId, topic, brief, agents, transcript, turns, memory } = setup;
+    const { conversationId, topic, title, starred, brief, agents, transcript, turns, memory } = setup;
 
     res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
     res.setHeader("Cache-Control", "no-cache");
@@ -1002,6 +1120,8 @@ app.post("/api/conversation/stream", async (req, res) => {
       type: "meta",
       conversationId,
       topic,
+      title,
+      starred,
       brief,
       agents,
       engine: getEngineLabel(),
@@ -1035,6 +1155,8 @@ app.post("/api/conversation/stream", async (req, res) => {
       type: "done",
       conversationId,
       topic,
+      title,
+      starred,
       brief,
       agents,
       turns: batch.newEntries.length,
@@ -1062,10 +1184,12 @@ app.post("/api/conversation", async (req, res) => {
       return res.status(setup.status).json({ error: setup.error });
     }
 
-    const { conversationId, topic, brief, agents, transcript, turns, memory } = setup;
+    const { conversationId, topic, title, starred, brief, agents, transcript, turns, memory } = setup;
     const batch = await runConversationBatch({
       conversationId,
       topic,
+      title,
+      starred,
       brief,
       agents,
       transcript,
@@ -1076,6 +1200,8 @@ app.post("/api/conversation", async (req, res) => {
     return res.json({
       conversationId,
       topic,
+      title,
+      starred,
       brief,
       agents,
       turns: batch.newEntries.length,

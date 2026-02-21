@@ -143,6 +143,32 @@ textarea:focus {
   padding: 0.7rem;
 }
 
+.thread-panel {
+  margin-top: 0.75rem;
+  border: 1px solid rgba(131, 201, 230, 0.18);
+  border-radius: 14px;
+  background: rgba(7, 21, 31, 0.58);
+  padding: 0.7rem;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.thread-panel label {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.thread-actions {
+  display: inline-flex;
+  gap: 0.45rem;
+}
+
+.starred-btn {
+  border-color: rgba(158, 222, 116, 0.55);
+  background: rgba(137, 206, 86, 0.2);
+  color: #e7ffd7;
+}
+
 .agent-panel {
   margin-top: 0.75rem;
   border: 1px solid rgba(131, 201, 230, 0.18);
@@ -274,6 +300,10 @@ button:disabled {
   margin-bottom: 0.45rem;
 }
 
+#history-search {
+  margin-bottom: 0.5rem;
+}
+
 .history-list {
   list-style: none;
   padding: 0;
@@ -292,6 +322,36 @@ button:disabled {
   background: rgba(8, 21, 31, 0.9);
   display: grid;
   gap: 0.24rem;
+}
+
+.thread-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.thread-title {
+  font-size: 0.85rem;
+  line-height: 1.35;
+}
+
+.thread-star {
+  min-width: 1.35rem;
+  height: 1.35rem;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid rgba(127, 186, 217, 0.26);
+  background: rgba(9, 22, 33, 0.86);
+  color: #93acc0;
+  font-size: 0.73rem;
+  line-height: 1;
+}
+
+.thread-star.active {
+  color: #f0ffc2;
+  border-color: rgba(187, 223, 112, 0.68);
+  background: rgba(129, 180, 69, 0.24);
 }
 
 .thread-item:hover {

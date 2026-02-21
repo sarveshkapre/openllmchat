@@ -2,15 +2,19 @@ const form = document.querySelector("#conversation-form");
 const topicInput = document.querySelector("#topic");
 const startBtn = document.querySelector("#start-btn");
 const clearBtn = document.querySelector("#clear-btn");
+const saveThreadBtn = document.querySelector("#save-thread-btn");
+const toggleStarBtn = document.querySelector("#toggle-star-btn");
 const saveBriefBtn = document.querySelector("#save-brief-btn");
 const saveAgentsBtn = document.querySelector("#save-agents-btn");
 const copyBtn = document.querySelector("#copy-btn");
 const downloadBtn = document.querySelector("#download-btn");
 const refreshHistoryBtn = document.querySelector("#refresh-history-btn");
+const historySearchInput = document.querySelector("#history-search");
 const refreshMemoryBtn = document.querySelector("#refresh-memory-btn");
 const objectiveInput = document.querySelector("#objective");
 const constraintsInput = document.querySelector("#constraints");
 const doneCriteriaInput = document.querySelector("#done-criteria");
+const threadTitleInput = document.querySelector("#thread-title");
 const agentANameInput = document.querySelector("#agent-a-name");
 const agentATempInput = document.querySelector("#agent-a-temp");
 const agentAStyleInput = document.querySelector("#agent-a-style");
@@ -48,10 +52,13 @@ const DEFAULT_AGENTS = [
 
 let activeConversationId = localStorage.getItem(CONVERSATION_ID_KEY) || "";
 let activeTopic = localStorage.getItem(TOPIC_KEY) || "";
+let activeTitle = "";
+let activeStarred = false;
 let displayedTranscript = [];
 let memoryState = null;
 let qualityState = null;
 let memoryInspectorState = null;
+let cachedConversations = [];
 
 function setStatus(text) {
   statusEl.textContent = text;
@@ -59,6 +66,61 @@ function setStatus(text) {
 
 function setHistoryStatus(text) {
   historyStatusEl.textContent = text;
+}
+
+function normalizeThreadTitle(value) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 96);
+}
+
+function setStarButtonState(starred) {
+  activeStarred = Boolean(starred);
+  toggleStarBtn.dataset.starred = activeStarred ? "1" : "0";
+  toggleStarBtn.textContent = activeStarred ? "Starred" : "Star";
+  toggleStarBtn.classList.toggle("starred-btn", activeStarred);
+}
+
+function setThreadMeta(meta) {
+  activeTitle = normalizeThreadTitle(meta?.title || "");
+  threadTitleInput.value = activeTitle;
+  setStarButtonState(Boolean(meta?.starred));
+}
+
+function getThreadMetaPayload() {
+  return {
+    title: normalizeThreadTitle(threadTitleInput.value),
+    starred: activeStarred
+  };
+}
+
+async function persistThreadMeta(meta, successMessage = "Thread settings saved.") {
+  if (!activeConversationId) {
+    setStatus("Thread settings stored locally. Start a thread to persist them.");
+    return false;
+  }
+
+  const response = await fetch(`/api/conversation/${encodeURIComponent(activeConversationId)}/meta`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(meta)
+  });
+  const result = await response.json();
+
+  if (!response.ok) {
+    throw new Error(result.error || "Could not save thread settings");
+  }
+
+  setThreadMeta({
+    title: result.title || "",
+    starred: Boolean(result.starred)
+  });
+  setStatus(successMessage);
+  await loadHistory();
+  return true;
 }
 
 function setMemoryInspectorStatus(text) {
@@ -426,6 +488,7 @@ async function forkConversation(turn) {
 
     topicInput.value = result.topic;
     setConversationState(result.conversationId, result.topic);
+    setThreadMeta({ title: result.title || "", starred: Boolean(result.starred) });
     setBriefFields(result.brief || null);
     setAgentFields(result.agents || null);
     setMemoryChip(result.memory || null);
@@ -464,6 +527,8 @@ function toMarkdownTranscript() {
     `# openllmchat transcript`,
     ``,
     `- Topic: ${titleTopic}`,
+    `- Title: ${threadTitleInput.value.trim() || "n/a"}`,
+    `- Starred: ${activeStarred ? "yes" : "no"}`,
     `- Conversation ID: ${activeConversationId || "n/a"}`,
     `- Total turns: ${displayedTranscript.length}`,
     `- Memory tokens: ${memoryState?.tokenCount || 0}`,
@@ -514,6 +579,7 @@ async function loadConversation(conversationId) {
 
   topicInput.value = result.topic;
   setConversationState(result.conversationId, result.topic);
+  setThreadMeta({ title: result.title || "", starred: Boolean(result.starred) });
   setBriefFields(result.brief || null);
   setAgentFields(result.agents || null);
 
@@ -534,19 +600,50 @@ async function loadConversation(conversationId) {
   await refreshMemoryInspector();
 }
 
+function getVisibleConversations(conversations) {
+  const query = historySearchInput.value.trim().toLowerCase();
+  if (!query) {
+    return conversations;
+  }
+
+  return conversations.filter((conversation) => {
+    const haystack = `${conversation.title || ""} ${conversation.topic || ""}`.toLowerCase();
+    return haystack.includes(query);
+  });
+}
+
+async function setConversationStar(conversationId, starred) {
+  const response = await fetch(`/api/conversation/${encodeURIComponent(conversationId)}/meta`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ starred })
+  });
+  const result = await response.json();
+  if (!response.ok) {
+    throw new Error(result.error || "Could not update thread star");
+  }
+
+  if (conversationId === activeConversationId) {
+    setThreadMeta({ title: result.title || "", starred: Boolean(result.starred) });
+  }
+}
+
 function renderHistory(conversations) {
+  const visibleConversations = getVisibleConversations(conversations);
   historyListEl.innerHTML = "";
 
-  if (!conversations.length) {
+  if (!visibleConversations.length) {
     const empty = document.createElement("li");
     empty.className = "empty";
-    empty.textContent = "No saved threads yet.";
+    empty.textContent = conversations.length ? "No threads match this search." : "No saved threads yet.";
     historyListEl.appendChild(empty);
-    setHistoryStatus("0 saved threads");
+    setHistoryStatus(conversations.length ? "No matches" : "0 saved threads");
     return;
   }
 
-  for (const conversation of conversations) {
+  for (const conversation of visibleConversations) {
     const li = document.createElement("li");
     const button = document.createElement("button");
     button.type = "button";
@@ -556,9 +653,30 @@ function renderHistory(conversations) {
       button.classList.add("active");
     }
 
-    const topic = document.createElement("span");
-    topic.className = "thread-topic";
-    topic.textContent = conversation.topic;
+    const head = document.createElement("div");
+    head.className = "thread-head";
+
+    const title = document.createElement("span");
+    title.className = "thread-title";
+    title.textContent = conversation.title || conversation.topic;
+
+    const starBtn = document.createElement("button");
+    starBtn.type = "button";
+    starBtn.className = "thread-star";
+    if (conversation.starred) {
+      starBtn.classList.add("active");
+    }
+    starBtn.textContent = conversation.starred ? "★" : "☆";
+    starBtn.addEventListener("click", async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      try {
+        await setConversationStar(conversation.id, !conversation.starred);
+        await loadHistory();
+      } catch (error) {
+        setStatus(error.message || "Could not update thread star.");
+      }
+    });
 
     const meta = document.createElement("span");
     meta.className = "thread-meta";
@@ -570,7 +688,9 @@ function renderHistory(conversations) {
       conversation.hasBrief ? " • brief" : ""
     }${agentMeta}${forkMeta}`;
 
-    button.appendChild(topic);
+    head.appendChild(title);
+    head.appendChild(starBtn);
+    button.appendChild(head);
     button.appendChild(meta);
     button.addEventListener("click", async () => {
       if (conversation.id === activeConversationId) {
@@ -590,7 +710,8 @@ function renderHistory(conversations) {
     historyListEl.appendChild(li);
   }
 
-  setHistoryStatus(`${conversations.length} saved threads`);
+  const suffix = visibleConversations.length === conversations.length ? "" : ` (${visibleConversations.length} shown)`;
+  setHistoryStatus(`${conversations.length} saved threads${suffix}`);
 }
 
 async function loadHistory() {
@@ -602,8 +723,10 @@ async function loadHistory() {
       throw new Error(result.error || "Could not load history");
     }
 
-    renderHistory(result.conversations || []);
+    cachedConversations = result.conversations || [];
+    renderHistory(cachedConversations);
   } catch (error) {
+    cachedConversations = [];
     historyListEl.innerHTML = "";
     const empty = document.createElement("li");
     empty.className = "empty";
@@ -616,6 +739,7 @@ async function loadHistory() {
 async function restoreConversation() {
   if (!activeConversationId) {
     clearTranscript("Enter a topic to begin.");
+    setThreadMeta(null);
     setBriefFields(null);
     setAgentFields(null);
     setMemoryChip(null);
@@ -632,6 +756,7 @@ async function restoreConversation() {
     clearConversationState();
     clearTranscript("Saved conversation was not found. Start a new topic.");
     engineChipEl.textContent = "Engine: waiting";
+    setThreadMeta(null);
     setBriefFields(null);
     setAgentFields(null);
     setMemoryChip(null);
@@ -645,9 +770,14 @@ refreshHistoryBtn.addEventListener("click", async () => {
   await loadHistory();
 });
 
+historySearchInput.addEventListener("input", () => {
+  renderHistory(cachedConversations);
+});
+
 clearBtn.addEventListener("click", async () => {
   clearConversationState();
   topicInput.value = "";
+  setThreadMeta(null);
   setBriefFields(null);
   setAgentFields(null);
   clearTranscript("Started a fresh thread.");
@@ -660,6 +790,36 @@ clearBtn.addEventListener("click", async () => {
 
 refreshMemoryBtn.addEventListener("click", async () => {
   await refreshMemoryInspector();
+});
+
+saveThreadBtn.addEventListener("click", async () => {
+  try {
+    await persistThreadMeta(getThreadMetaPayload());
+  } catch (error) {
+    setStatus(error.message || "Could not save thread settings.");
+  }
+});
+
+toggleStarBtn.addEventListener("click", async () => {
+  const nextStarred = !activeStarred;
+  setStarButtonState(nextStarred);
+  if (!activeConversationId) {
+    setStatus("Star setting stored locally. Start a thread to persist it.");
+    return;
+  }
+
+  try {
+    await persistThreadMeta(
+      {
+        title: normalizeThreadTitle(threadTitleInput.value),
+        starred: nextStarred
+      },
+      nextStarred ? "Thread starred." : "Thread unstarred."
+    );
+  } catch (error) {
+    setStarButtonState(!nextStarred);
+    setStatus(error.message || "Could not update star state.");
+  }
 });
 
 saveBriefBtn.addEventListener("click", async () => {
@@ -773,6 +933,7 @@ form.addEventListener("submit", async (event) => {
     clearConversationState();
     transcriptEl.innerHTML = "";
     displayedTranscript = [];
+    setThreadMeta(null);
     setMemoryChip(null);
     clearMemoryInspector("Switched topic. Memory will rebuild for the new thread.");
   }
@@ -780,7 +941,9 @@ form.addEventListener("submit", async (event) => {
   const conversationId = activeConversationId || undefined;
   const brief = getBriefPayload();
   const agents = getAgentPayload();
+  const threadMeta = getThreadMetaPayload();
   const includeAgents = hasCustomAgentOverrides(agents);
+  const includeThreadMeta = Boolean(threadMeta.title || threadMeta.starred);
 
   if (!conversationId) {
     transcriptEl.innerHTML = "";
@@ -803,6 +966,10 @@ form.addEventListener("submit", async (event) => {
     };
     if (includeAgents) {
       payload.agents = agents;
+    }
+    if (includeThreadMeta) {
+      payload.title = threadMeta.title;
+      payload.starred = threadMeta.starred;
     }
 
     const response = await fetch("/api/conversation/stream", {
@@ -835,6 +1002,7 @@ form.addEventListener("submit", async (event) => {
     const handleChunk = (chunk) => {
       if (chunk.type === "meta") {
         setConversationState(chunk.conversationId, chunk.topic);
+        setThreadMeta({ title: chunk.title || "", starred: Boolean(chunk.starred) });
         engineChipEl.textContent = `Engine: ${chunk.engine}`;
         if (chunk.brief) {
           setBriefFields(chunk.brief);
@@ -880,6 +1048,7 @@ form.addEventListener("submit", async (event) => {
       if (chunk.type === "done") {
         totalTurns = chunk.totalTurns ?? totalTurns;
         finalTopic = chunk.topic || finalTopic;
+        setThreadMeta({ title: chunk.title || "", starred: Boolean(chunk.starred) });
         if (chunk.brief) {
           setBriefFields(chunk.brief);
         }
@@ -951,6 +1120,7 @@ form.addEventListener("submit", async (event) => {
   }
 });
 
+setThreadMeta(null);
 setAgentFields(null);
 clearMemoryInspector();
 

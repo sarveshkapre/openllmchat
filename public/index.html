@@ -39,6 +39,17 @@
             <button id="start-btn" type="submit">Start live 10-turn dialog</button>
           </div>
         </form>
+        <section class="thread-panel">
+          <div class="brief-topbar">
+            <h2>Thread Organizer</h2>
+            <div class="thread-actions">
+              <button id="toggle-star-btn" class="secondary" type="button">Star</button>
+              <button id="save-thread-btn" class="secondary" type="button">Save thread</button>
+            </div>
+          </div>
+          <label for="thread-title">Thread title</label>
+          <input id="thread-title" type="text" maxlength="96" placeholder="Optional custom title for this thread" />
+        </section>
         <section class="brief-panel">
           <div class="brief-topbar">
             <h2>Conversation Brief</h2>
@@ -108,6 +119,7 @@
             <h2>Threads</h2>
             <button id="refresh-history-btn" class="secondary" type="button">Refresh</button>
           </div>
+          <input id="history-search" type="search" placeholder="Search threads by title or topic" />
           <div id="history-status" class="history-status">Loading threads...</div>
           <ul id="history-list" class="history-list" aria-live="polite"></ul>
         </aside>
