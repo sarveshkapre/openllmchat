@@ -376,6 +376,24 @@ h2 {
   line-height: 1.55;
 }
 
+.quality-row {
+  margin-top: 0.34rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.quality-pill {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid rgba(125, 186, 214, 0.25);
+  border-radius: 999px;
+  padding: 0.12rem 0.44rem;
+  color: #b9d5e5;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.62rem;
+}
+
 .empty {
   color: #92aabc;
   font-style: italic;

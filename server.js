@@ -61,9 +61,19 @@ function readIntEnv(name, fallback, min, max) {
   return Math.max(min, Math.min(max, Math.trunc(value)));
 }
 
+function readFloatEnv(name, fallback, min, max) {
+  const raw = Number(process.env[name]);
+  const value = Number.isFinite(raw) ? raw : fallback;
+  return Math.max(min, Math.min(max, value));
+}
+
 const MODERATOR_INTERVAL = readIntEnv("MODERATOR_INTERVAL", 6, 2, 20);
 const MAX_GENERATION_MS = readIntEnv("MAX_GENERATION_MS", 30000, 3000, 120000);
 const MAX_REPETITION_STREAK = readIntEnv("MAX_REPETITION_STREAK", 2, 1, 5);
+const QUALITY_MIN_WORDS = readIntEnv("QUALITY_MIN_WORDS", 9, 4, 40);
+const QUALITY_RETRY_LIMIT = readIntEnv("QUALITY_RETRY_LIMIT", 1, 0, 3);
+const QUALITY_MAX_SIMILARITY = readFloatEnv("QUALITY_MAX_SIMILARITY", 0.9, 0.6, 0.98);
+const QUALITY_MIN_TOPIC_COVERAGE = readFloatEnv("QUALITY_MIN_TOPIC_COVERAGE", 0.12, 0.02, 0.8);
 
 const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
 const hasOpenAI = Boolean(process.env.OPENAI_API_KEY);
@@ -92,6 +102,68 @@ function tokenSet(text) {
     .map((token) => token.trim())
     .filter((token) => token.length > 2);
   return new Set(tokens);
+}
+
+function wordCount(text) {
+  return normalizeText(text).split(" ").filter(Boolean).length;
+}
+
+function getQualityKeywordSet(topic, brief) {
+  const source = [topic, brief?.objective, brief?.constraintsText, brief?.doneCriteria]
+    .filter(Boolean)
+    .join(" ");
+  const keywords = [...tokenSet(source)].filter((token) => token.length >= 4);
+  return new Set(keywords.slice(0, 40));
+}
+
+function topicCoverageScore(text, keywordSet) {
+  if (!keywordSet || keywordSet.size === 0) {
+    return 1;
+  }
+
+  const words = tokenSet(text);
+  if (!words.size) {
+    return 0;
+  }
+
+  let overlap = 0;
+  for (const keyword of keywordSet) {
+    if (words.has(keyword)) {
+      overlap += 1;
+    }
+  }
+
+  const denominator = Math.max(1, Math.min(10, keywordSet.size));
+  return Math.min(1, overlap / denominator);
+}
+
+function evaluateTurnQuality({ text, previousText, keywordSet }) {
+  const words = wordCount(text);
+  const similarity = previousText ? jaccardSimilarity(previousText, text) : 0;
+  const topicCoverage = topicCoverageScore(text, keywordSet);
+
+  const tooShort = words < QUALITY_MIN_WORDS;
+  const repetitive = similarity > QUALITY_MAX_SIMILARITY;
+  const offTopic = topicCoverage < QUALITY_MIN_TOPIC_COVERAGE;
+
+  const score = Math.max(
+    0,
+    Math.min(
+      1,
+      1 - (tooShort ? 0.24 : 0) - (repetitive ? 0.36 : 0) - (offTopic ? 0.3 : 0) + topicCoverage * 0.2
+    )
+  );
+
+  return {
+    score: Number(score.toFixed(4)),
+    wordCount: words,
+    similarityToPrevious: Number(similarity.toFixed(4)),
+    topicCoverage: Number(topicCoverage.toFixed(4)),
+    tooShort,
+    repetitive,
+    offTopic,
+    accepted: !tooShort && !repetitive && !offTopic
+  };
 }
 
 function jaccardSimilarity(a, b) {
@@ -443,11 +515,15 @@ async function runConversationBatch({
 }) {
   const newEntries = [];
   const startedAt = Date.now();
+  const qualityKeywordSet = getQualityKeywordSet(topic, brief);
   let moderatorDirective = brief?.objective
     ? `Prioritize this objective: ${brief.objective}`
     : "Maintain topic depth and avoid repetition.";
   let stopReason = "max_turns";
   let repetitionStreak = 0;
+  let retriesUsed = 0;
+  let qualityScoreTotal = 0;
+  let qualityTurns = 0;
 
   for (let i = 0; i < turns; i += 1) {
     if (Date.now() - startedAt > MAX_GENERATION_MS) {
@@ -457,28 +533,69 @@ async function runConversationBatch({
 
     const nextTurn = transcript.length + 1;
     const speaker = AGENTS[(nextTurn - 1) % AGENTS.length];
-    const generated = await generateTurn({
-      topic,
-      speaker,
-      transcript,
-      memory,
-      moderatorDirective,
-      brief
-    });
-
-    const signaledDone = containsDoneToken(generated);
-    const text = stripDonePrefix(generated);
-
-    const entry = {
-      turn: nextTurn,
-      speaker: speaker.name,
-      speakerId: speaker.id,
-      text: text || generated
-    };
-
     const previous = transcript[transcript.length - 1];
-    const similarity = previous ? jaccardSimilarity(previous.text, entry.text) : 0;
-    repetitionStreak = similarity >= 0.9 ? repetitionStreak + 1 : 0;
+
+    let entry = null;
+    let signaledDone = false;
+    let quality = null;
+    let attempts = 0;
+    let accepted = false;
+
+    while (attempts <= QUALITY_RETRY_LIMIT) {
+      const attemptDirective =
+        attempts === 0
+          ? moderatorDirective
+          : `${moderatorDirective} Quality retry: improve specificity, stay on-topic, avoid repetition, and be at least ${QUALITY_MIN_WORDS} words.`;
+
+      const generated = await generateTurn({
+        topic,
+        speaker,
+        transcript,
+        memory,
+        moderatorDirective: attemptDirective,
+        brief
+      });
+
+      signaledDone = containsDoneToken(generated);
+      const text = stripDonePrefix(generated);
+      entry = {
+        turn: nextTurn,
+        speaker: speaker.name,
+        speakerId: speaker.id,
+        text: text || generated
+      };
+
+      quality = evaluateTurnQuality({
+        text: entry.text,
+        previousText: previous?.text,
+        keywordSet: qualityKeywordSet
+      });
+      attempts += 1;
+
+      if (quality.accepted || attempts > QUALITY_RETRY_LIMIT) {
+        accepted = quality.accepted;
+        break;
+      }
+
+      if (writeChunk) {
+        writeChunk({
+          type: "retry",
+          turn: nextTurn,
+          attempt: attempts,
+          reason: quality.tooShort
+            ? "too_short"
+            : quality.repetitive
+              ? "repetitive"
+              : "off_topic",
+          quality
+        });
+      }
+    }
+
+    qualityScoreTotal += quality?.score ?? 0;
+    qualityTurns += 1;
+    retriesUsed += Math.max(0, attempts - 1);
+    repetitionStreak = quality?.repetitive ? repetitionStreak + 1 : 0;
 
     transcript.push(entry);
     newEntries.push(entry);
@@ -489,7 +606,9 @@ async function runConversationBatch({
         entry,
         totalTurns: transcript.length,
         quality: {
-          similarityToPrevious: Number(similarity.toFixed(4)),
+          ...quality,
+          attempts,
+          accepted,
           repetitionStreak
         }
       });
@@ -536,7 +655,12 @@ async function runConversationBatch({
     totalTurns: transcript.length,
     stopReason,
     moderatorDirective,
-    memoryStats
+    memoryStats,
+    qualitySummary: {
+      avgScore: Number((qualityTurns ? qualityScoreTotal / qualityTurns : 0).toFixed(4)),
+      retriesUsed,
+      turnsEvaluated: qualityTurns
+    }
   };
 }
 
@@ -732,7 +856,13 @@ app.post("/api/conversation/stream", async (req, res) => {
       guardrails: {
         moderatorInterval: MODERATOR_INTERVAL,
         maxGenerationMs: MAX_GENERATION_MS,
-        maxRepetitionStreak: MAX_REPETITION_STREAK
+        maxRepetitionStreak: MAX_REPETITION_STREAK,
+        quality: {
+          minWords: QUALITY_MIN_WORDS,
+          maxSimilarity: QUALITY_MAX_SIMILARITY,
+          minTopicCoverage: QUALITY_MIN_TOPIC_COVERAGE,
+          retryLimit: QUALITY_RETRY_LIMIT
+        }
       }
     });
 
@@ -754,7 +884,8 @@ app.post("/api/conversation/stream", async (req, res) => {
       turns: batch.newEntries.length,
       totalTurns: batch.totalTurns,
       stopReason: batch.stopReason,
-      memory: batch.memoryStats
+      memory: batch.memoryStats,
+      quality: batch.qualitySummary
     });
     res.end();
   } catch (error) {
@@ -794,7 +925,8 @@ app.post("/api/conversation", async (req, res) => {
       stopReason: batch.stopReason,
       engine: getEngineLabel(),
       transcript: batch.newEntries,
-      memory: batch.memoryStats
+      memory: batch.memoryStats,
+      quality: batch.qualitySummary
     });
   } catch (error) {
     console.error(error);

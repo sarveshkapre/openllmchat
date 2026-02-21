@@ -13,6 +13,7 @@ const transcriptEl = document.querySelector("#transcript");
 const statusEl = document.querySelector("#status");
 const engineChipEl = document.querySelector("#engine-chip");
 const memoryChipEl = document.querySelector("#memory-chip");
+const qualityChipEl = document.querySelector("#quality-chip");
 const historyListEl = document.querySelector("#history-list");
 const historyStatusEl = document.querySelector("#history-status");
 
@@ -23,6 +24,7 @@ let activeConversationId = localStorage.getItem(CONVERSATION_ID_KEY) || "";
 let activeTopic = localStorage.getItem(TOPIC_KEY) || "";
 let displayedTranscript = [];
 let memoryState = null;
+let qualityState = null;
 
 function setStatus(text) {
   statusEl.textContent = text;
@@ -43,6 +45,18 @@ function setMemoryChip(memory) {
   const summaries = Number(memoryState.summaryCount || 0);
   const semantic = Number(memoryState.semanticCount || 0);
   memoryChipEl.textContent = `Memory: ${tokens} tokens • ${summaries} summaries • ${semantic} semantic`;
+}
+
+function setQualityChip(quality) {
+  qualityState = quality || null;
+  if (!qualityState) {
+    qualityChipEl.textContent = "Quality: waiting";
+    return;
+  }
+
+  const score = Number(qualityState.avgScore || 0);
+  const retries = Number(qualityState.retriesUsed || 0);
+  qualityChipEl.textContent = `Quality: ${(score * 100).toFixed(0)} • retries ${retries}`;
 }
 
 function setConversationState(conversationId, topic) {
@@ -121,6 +135,7 @@ function appendMessage(entry, animate = true) {
 
   const text = document.createElement("p");
   text.textContent = entry.text;
+  const quality = entry.quality || null;
 
   head.appendChild(speaker);
   turnGroup.appendChild(turn);
@@ -128,6 +143,32 @@ function appendMessage(entry, animate = true) {
   head.appendChild(turnGroup);
   item.appendChild(head);
   item.appendChild(text);
+
+  if (quality) {
+    const qualityRow = document.createElement("div");
+    qualityRow.className = "quality-row";
+    const score = document.createElement("span");
+    score.className = "quality-pill";
+    score.textContent = `Score ${(Number(quality.score || 0) * 100).toFixed(0)}`;
+
+    const words = document.createElement("span");
+    words.className = "quality-pill";
+    words.textContent = `${quality.wordCount || 0} words`;
+
+    const sim = document.createElement("span");
+    sim.className = "quality-pill";
+    sim.textContent = `sim ${Number(quality.similarityToPrevious || 0).toFixed(2)}`;
+
+    const tries = document.createElement("span");
+    tries.className = "quality-pill";
+    tries.textContent = `tries ${quality.attempts || 1}`;
+
+    qualityRow.appendChild(score);
+    qualityRow.appendChild(words);
+    qualityRow.appendChild(sim);
+    qualityRow.appendChild(tries);
+    item.appendChild(qualityRow);
+  }
 
   if (!animate) {
     item.style.animation = "none";
@@ -165,6 +206,7 @@ async function forkConversation(turn) {
     setConversationState(result.conversationId, result.topic);
     setBriefFields(result.brief || null);
     setMemoryChip(result.memory || null);
+    setQualityChip(null);
 
     if (!result.transcript.length) {
       renderEmpty();
@@ -203,6 +245,8 @@ function toMarkdownTranscript() {
     `- Memory tokens: ${memoryState?.tokenCount || 0}`,
     `- Memory summaries: ${memoryState?.summaryCount || 0}`,
     `- Semantic memory items: ${memoryState?.semanticCount || 0}`,
+    `- Quality avg score: ${qualityState?.avgScore ?? 0}`,
+    `- Quality retries: ${qualityState?.retriesUsed ?? 0}`,
     `- Objective: ${objectiveInput.value.trim() || "n/a"}`,
     `- Constraints: ${constraintsInput.value.trim() || "n/a"}`,
     `- Done criteria: ${doneCriteriaInput.value.trim() || "n/a"}`,
@@ -259,6 +303,7 @@ async function loadConversation(conversationId) {
   setStatus(`Restored ${result.totalTurns} turns on topic: ${result.topic}`);
   engineChipEl.textContent = "Engine: restored thread";
   setMemoryChip(result.memory || null);
+  setQualityChip(null);
 }
 
 function renderHistory(conversations) {
@@ -344,6 +389,7 @@ async function restoreConversation() {
     clearTranscript("Enter a topic to begin.");
     setBriefFields(null);
     setMemoryChip(null);
+    setQualityChip(null);
     return;
   }
 
@@ -357,6 +403,7 @@ async function restoreConversation() {
     engineChipEl.textContent = "Engine: waiting";
     setBriefFields(null);
     setMemoryChip(null);
+    setQualityChip(null);
   }
 }
 
@@ -372,6 +419,7 @@ clearBtn.addEventListener("click", async () => {
   clearTranscript("Started a fresh thread.");
   engineChipEl.textContent = "Engine: waiting";
   setMemoryChip(null);
+  setQualityChip(null);
   await loadHistory();
 });
 
@@ -506,6 +554,7 @@ form.addEventListener("submit", async (event) => {
     let finalTopic = topic;
     let stopReason = "max_turns";
     let moderatorHint = "";
+    let qualitySummary = null;
 
     const handleChunk = (chunk) => {
       if (chunk.type === "meta") {
@@ -515,16 +564,26 @@ form.addEventListener("submit", async (event) => {
           setBriefFields(chunk.brief);
         }
         setMemoryChip(chunk.memory || null);
+        setQualityChip(null);
         finalTopic = chunk.topic || finalTopic;
         return;
       }
 
       if (chunk.type === "turn") {
         if (chunk.entry) {
+          if (chunk.quality) {
+            chunk.entry.quality = chunk.quality;
+          }
           appendMessage(chunk.entry);
           generatedTurns += 1;
         }
         totalTurns = chunk.totalTurns ?? totalTurns;
+        return;
+      }
+
+      if (chunk.type === "retry") {
+        const reason = chunk.reason || "quality";
+        setStatus(`Quality optimizer retry on turn ${chunk.turn}: ${reason}`);
         return;
       }
 
@@ -544,6 +603,8 @@ form.addEventListener("submit", async (event) => {
         }
         stopReason = chunk.stopReason || stopReason;
         setMemoryChip(chunk.memory || null);
+        qualitySummary = chunk.quality || null;
+        setQualityChip(qualitySummary);
         return;
       }
 
@@ -578,15 +639,19 @@ form.addEventListener("submit", async (event) => {
     const reasonSuffix =
       stopReason && stopReason !== "max_turns" ? ` Stop reason: ${stopReason}.` : "";
     const moderatorSuffix = moderatorHint ? ` Last moderator hint: ${moderatorHint}` : "";
+    const qualitySuffix = qualitySummary
+      ? ` Quality ${(Number(qualitySummary.avgScore || 0) * 100).toFixed(0)} with ${qualitySummary.retriesUsed || 0} retries.`
+      : "";
 
     setStatus(
-      `Added ${generatedTurns} turns. Total turns: ${totalTurns}. Topic: ${finalTopic}.${reasonSuffix}${moderatorSuffix}`
+      `Added ${generatedTurns} turns. Total turns: ${totalTurns}. Topic: ${finalTopic}.${reasonSuffix}${moderatorSuffix}${qualitySuffix}`
     );
     await loadHistory();
   } catch (error) {
     if (String(error.message || "").toLowerCase().includes("not found")) {
       clearConversationState();
       setMemoryChip(null);
+      setQualityChip(null);
       await loadHistory();
     }
 

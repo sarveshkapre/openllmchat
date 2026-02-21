@@ -16,6 +16,10 @@ Modern web app where two AI agents discuss a user topic in 10-turn batches while
   - Charter-driven turn generation
   - Moderator pass every N turns with steering directives
   - Repetition guard and optional DONE-token stopping
+- Quality optimizer:
+  - Scores each turn for topic coverage, verbosity, and repetition
+  - Auto-retries weak turns with stricter guidance
+  - Exposes quality score and retries in stream/UI
 - Conversation Brief per thread:
   - Objective
   - Constraints
@@ -54,6 +58,10 @@ Open `http://localhost:3000`.
 - `MODERATOR_INTERVAL`: run moderator every N total turns (default `6`)
 - `MAX_GENERATION_MS`: hard per-request generation time budget (default `30000`)
 - `MAX_REPETITION_STREAK`: allowed near-duplicate turn streak before stop (default `2`)
+- `QUALITY_MIN_WORDS`: minimum words required per turn before retry (default `9`)
+- `QUALITY_RETRY_LIMIT`: retries per turn when quality checks fail (default `1`)
+- `QUALITY_MAX_SIMILARITY`: max similarity to previous turn before retry (default `0.9`)
+- `QUALITY_MIN_TOPIC_COVERAGE`: minimum keyword overlap score before retry (default `0.12`)
 - `PORT`: server port (default `3000`)
 
 ## API
@@ -75,16 +83,17 @@ Request body:
 }
 ```
 
-Response includes generated turns, total turns, memory stats, brief, and stop reason.
+Response includes generated turns, total turns, memory stats, brief, quality summary, and stop reason.
 
 ### `POST /api/conversation/stream`
 
 Same behavior as `POST /api/conversation`, but returns newline-delimited JSON chunks for live UI updates:
 
 - `meta`: conversation info, engine, memory stats, brief, charter, guardrails
+- `retry`: quality optimizer retry event
 - `turn`: one generated turn plus quality stats
 - `moderator`: moderator assessment/directive
-- `done`: final summary with stop reason, brief, and updated memory stats
+- `done`: final summary with stop reason, brief, quality summary, and updated memory stats
 
 ### `GET /api/conversation/:id`
 
