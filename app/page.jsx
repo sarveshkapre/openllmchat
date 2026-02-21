@@ -16,6 +16,9 @@ const STORAGE_KEYS = {
   agentBPersona: "openllmchat:min:agentBPersona"
 };
 
+const SELECT_CLASSNAME =
+  "h-9 min-w-[148px] rounded-lg border border-input/90 bg-background/90 px-3 text-sm shadow-sm outline-none focus:border-primary/60 focus:ring-2 focus:ring-ring/25";
+
 const PERSONA_PRESETS = [
   {
     id: "atlas",
@@ -598,17 +601,19 @@ export default function HomePage() {
   }, [conversations.length, historyLoading]);
 
   return (
-    <main className="h-screen bg-background text-foreground">
-      <div className="flex h-screen">
+    <main className="app-shell h-screen text-foreground">
+      <div className="flex h-screen bg-background/45 backdrop-blur-[2px]">
         <aside
           className={cn(
-            "hidden border-r bg-muted/20 transition-all duration-200 ease-out md:flex md:flex-col",
+            "hidden border-r border-border/60 bg-background/70 shadow-[8px_0_34px_-30px_hsl(var(--foreground)/0.45)] backdrop-blur-xl transition-all duration-300 ease-out md:flex md:flex-col",
             historyOpen ? "md:w-[300px]" : "md:w-16"
           )}
         >
-          <div className={cn("border-b p-3", historyOpen ? "space-y-3" : "space-y-2")}>
+          <div className={cn("border-b border-border/60 p-3", historyOpen ? "space-y-3" : "space-y-2")}>
             <div className={cn("flex items-center", historyOpen ? "justify-between" : "justify-center")}>
-              {historyOpen ? <p className="text-sm font-semibold text-foreground">openllmchat</p> : null}
+              {historyOpen ? (
+                <p className="text-sm font-semibold tracking-tight text-foreground/95">openllmchat</p>
+              ) : null}
               <Button
                 variant="ghost"
                 size="icon"
@@ -621,8 +626,8 @@ export default function HomePage() {
             {historyOpen ? (
               <>
                 <p className="text-xs text-muted-foreground">{historyStatus}</p>
-                <div className="flex items-center gap-1">
-                  <Button variant="secondary" className="flex-1" onClick={onNewThread}>
+                <div className="flex items-center gap-1.5">
+                  <Button variant="secondary" className="flex-1 shadow-sm" onClick={onNewThread}>
                     <Plus className="size-4" />
                     New conversation
                   </Button>
@@ -667,7 +672,7 @@ export default function HomePage() {
           {historyOpen ? (
             <div className="thread-scroll flex-1 overflow-y-auto p-2">
               {conversations.length === 0 ? (
-                <p className="rounded-md px-3 py-2 text-sm text-muted-foreground">No conversations yet.</p>
+                <p className="rounded-lg px-3 py-2 text-sm text-muted-foreground">No conversations yet.</p>
               ) : (
                 <ul className="space-y-1">
                   {conversations.map((conversation) => {
@@ -678,10 +683,10 @@ export default function HomePage() {
                           type="button"
                           onClick={() => loadConversation(conversation.id).catch((error) => setStatus(error.message))}
                           className={cn(
-                            "w-full rounded-md border px-3 py-2 text-left transition-colors",
+                            "w-full rounded-xl px-3 py-2.5 text-left transition-all duration-200",
                             isActive
-                              ? "border-primary/40 bg-primary/10"
-                              : "border-transparent hover:border-border hover:bg-muted/55"
+                              ? "bg-primary/14 text-foreground ring-1 ring-primary/30"
+                              : "hover:bg-muted/55"
                           )}
                         >
                           <p className="truncate text-sm font-medium">{conversation.title || conversation.topic}</p>
@@ -701,7 +706,7 @@ export default function HomePage() {
         </aside>
 
         <section className="flex min-w-0 flex-1 flex-col">
-          <header className="flex items-center justify-between border-b px-4 py-3 md:px-6">
+          <header className="sticky top-0 z-20 flex items-center justify-between border-b border-border/60 bg-background/70 px-4 py-3 backdrop-blur-xl md:px-6">
             <div className="min-w-0">
               <p className="truncate text-sm font-medium text-foreground">
                 {topic.trim() || "Two-agent conversation"}
@@ -749,33 +754,35 @@ export default function HomePage() {
           </header>
 
           <div ref={scrollRef} className="thread-scroll relative min-h-0 flex-1 overflow-y-auto">
-            <div className="mx-auto w-full max-w-4xl px-4 py-6 md:px-8">
+            <div className="mx-auto w-full max-w-5xl px-4 py-6 md:px-8">
               {messages.length === 0 ? (
                 <div className="mx-auto mt-16 max-w-2xl text-center">
-                  <h1 className="text-2xl font-semibold tracking-tight">openllmchat</h1>
-                  <p className="mt-2 text-sm text-muted-foreground">
+                  <h1 className="bg-gradient-to-r from-foreground to-foreground/70 bg-clip-text text-3xl font-semibold tracking-tight text-transparent">
+                    openllmchat
+                  </h1>
+                  <p className="mt-3 text-sm text-muted-foreground">
                     Start a topic and let two personas discuss it.
                   </p>
                 </div>
               ) : (
-                <ul className="space-y-5">
+                <ul className="space-y-6">
                   {messages.map((entry, index) => {
                     const isLeft = belongsToAgent(entry, "agent-a", agentAPreset.name);
                     return (
                       <li
                         key={`${entry.turn}-${index}`}
-                        className={cn("flex w-full", isLeft ? "justify-start" : "justify-end")}
+                        className={cn("message-enter flex w-full", isLeft ? "justify-start" : "justify-end")}
                       >
                         <div className={cn("max-w-[82%] space-y-1", isLeft ? "items-start" : "items-end")}>
-                          <p className={cn("text-xs", isLeft ? "text-muted-foreground" : "text-primary")}>
+                          <p className={cn("text-xs font-medium", isLeft ? "text-muted-foreground" : "text-primary/90")}>
                             {formatSpeakerLabel(entry.speaker)} · Turn {Number(entry.turn || index + 1)}
                           </p>
                           <div
                             className={cn(
-                              "rounded-2xl px-4 py-3 text-[15px] leading-7 tracking-[-0.01em]",
+                              "rounded-2xl px-4 py-3 text-[15px] leading-7 tracking-[-0.01em] ring-1 ring-transparent",
                               isLeft
-                                ? "border bg-card text-card-foreground shadow-sm"
-                                : "bg-primary text-primary-foreground shadow-sm"
+                                ? "bg-background/88 text-card-foreground shadow-[0_14px_40px_-28px_hsl(var(--foreground)/0.52)] ring-border/70 backdrop-blur-sm"
+                                : "bg-gradient-to-br from-primary via-primary to-primary/85 text-primary-foreground shadow-[0_16px_48px_-28px_hsl(var(--primary)/0.9)]"
                             )}
                           >
                             {entry.text || ""}
@@ -793,7 +800,7 @@ export default function HomePage() {
                 <div className="pointer-events-auto">
                   <Button
                     variant="secondary"
-                    className="rounded-full shadow-sm"
+                    className="rounded-full border border-border/70 bg-background/85 shadow-[0_14px_35px_-22px_hsl(var(--foreground)/0.5)] backdrop-blur"
                     onClick={() => {
                       setAutoScrollEnabled(true);
                       setShowJumpToBottom(false);
@@ -807,9 +814,9 @@ export default function HomePage() {
             ) : null}
           </div>
 
-          <footer className="border-t bg-background/95 px-3 py-3 md:px-6">
+          <footer className="border-t border-border/60 bg-background/70 px-3 py-3 backdrop-blur-xl md:px-6">
             <form
-              className="mx-auto w-full max-w-4xl rounded-2xl border bg-card p-3"
+              className="mx-auto w-full max-w-5xl rounded-2xl border border-border/70 bg-background/88 p-3 shadow-[0_18px_52px_-30px_hsl(var(--foreground)/0.5)] backdrop-blur"
               onSubmit={(event) => {
                 event.preventDefault();
                 if (!isRunning) {
@@ -824,9 +831,9 @@ export default function HomePage() {
                 maxLength={180}
                 aria-label="Conversation topic"
                 rows={1}
-                className="max-h-24 w-full resize-none rounded-md border-0 bg-transparent px-2 py-2 text-[15px] leading-6 shadow-none outline-none"
+                className="max-h-24 w-full resize-none rounded-md border-0 bg-transparent px-2 py-2 text-[15px] leading-6 shadow-none outline-none placeholder:text-muted-foreground/80"
               />
-              <div className="mt-2 flex flex-wrap items-center gap-2 border-t pt-2">
+              <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-border/60 pt-2">
                 <Input
                   type="number"
                   min={2}
@@ -834,12 +841,12 @@ export default function HomePage() {
                   value={turnsInput}
                   onChange={(event) => setTurnsInput(event.target.value)}
                   aria-label="Turns"
-                  className="h-9 w-20"
+                  className="h-9 w-20 bg-background/80 shadow-sm"
                 />
                 <select
                   value={agentAPersona}
                   onChange={(event) => setAgentAPersona(event.target.value)}
-                  className="h-9 min-w-[140px] rounded-md border border-input bg-background px-2 text-sm"
+                  className={SELECT_CLASSNAME}
                   aria-label="Agent A persona"
                 >
                   {PERSONA_PRESETS.map((preset) => (
@@ -851,7 +858,7 @@ export default function HomePage() {
                 <select
                   value={agentBPersona}
                   onChange={(event) => setAgentBPersona(event.target.value)}
-                  className="h-9 min-w-[140px] rounded-md border border-input bg-background px-2 text-sm"
+                  className={SELECT_CLASSNAME}
                   aria-label="Agent B persona"
                 >
                   {PERSONA_PRESETS.map((preset) => (
