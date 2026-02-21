@@ -16,6 +16,8 @@ const refreshInsightsBtn = document.querySelector("#refresh-insights-btn");
 const copyInsightsBtn = document.querySelector("#copy-insights-btn");
 const refreshDiscoveriesBtn = document.querySelector("#refresh-discoveries-btn");
 const copyDiscoveriesBtn = document.querySelector("#copy-discoveries-btn");
+const refreshCitationsBtn = document.querySelector("#refresh-citations-btn");
+const copyCitationsBtn = document.querySelector("#copy-citations-btn");
 const refreshScoreBtn = document.querySelector("#refresh-score-btn");
 const openBestLabBtn = document.querySelector("#open-best-lab-btn");
 const adoptBestModeBtn = document.querySelector("#adopt-best-mode-btn");
@@ -52,6 +54,9 @@ const discoveryStatusEl = document.querySelector("#discovery-status");
 const discoveryHypothesesListEl = document.querySelector("#discovery-hypotheses-list");
 const discoveryExperimentsListEl = document.querySelector("#discovery-experiments-list");
 const discoveryRisksListEl = document.querySelector("#discovery-risks-list");
+const citationStatusEl = document.querySelector("#citation-status");
+const citationSourceListEl = document.querySelector("#citation-source-list");
+const citationClaimListEl = document.querySelector("#citation-claim-list");
 const scoreStatusEl = document.querySelector("#score-status");
 const scoreFillEl = document.querySelector("#score-fill");
 const scoreComponentsListEl = document.querySelector("#score-components-list");
@@ -89,6 +94,7 @@ let scoreState = null;
 let memoryInspectorState = null;
 let insightState = null;
 let discoveryState = null;
+let citationState = null;
 let labResultsState = [];
 let cachedConversations = [];
 let draftSaveTimer = null;
@@ -262,6 +268,10 @@ function setDiscoveryStatus(text) {
   discoveryStatusEl.textContent = text;
 }
 
+function setCitationStatus(text) {
+  citationStatusEl.textContent = text;
+}
+
 function setLabStatus(text) {
   labStatusEl.textContent = text;
 }
@@ -326,6 +336,15 @@ function clearDiscoveryRadar(message = "Start or restore a thread to map hypothe
   discoveryExperimentsListEl.appendChild(createListEmpty("No experiments yet."));
   discoveryRisksListEl.appendChild(createListEmpty("No risks mapped yet."));
   setDiscoveryStatus(message);
+}
+
+function clearCitationTracker(message = "Start or restore a debate thread to track cited claims and confidence.") {
+  citationState = null;
+  citationSourceListEl.innerHTML = "";
+  citationClaimListEl.innerHTML = "";
+  citationSourceListEl.appendChild(createListEmpty("No sources yet."));
+  citationClaimListEl.appendChild(createListEmpty("No cited claims yet."));
+  setCitationStatus(message);
 }
 
 function clearScorecard(message = "Start or restore a thread to score progress.") {
@@ -671,6 +690,116 @@ async function refreshDiscoveryRadar() {
   }
 }
 
+function renderCitationTracker(payload) {
+  const citations = payload?.citations || null;
+  citationState = citations;
+  if (!citations) {
+    clearCitationTracker("No citation data available.");
+    return;
+  }
+
+  citationSourceListEl.innerHTML = "";
+  citationClaimListEl.innerHTML = "";
+
+  const sources = citations.sources || [];
+  const claims = citations.claims || [];
+
+  if (!sources.length) {
+    citationSourceListEl.appendChild(createListEmpty("No sources yet."));
+  } else {
+    for (const source of sources.slice(0, 16)) {
+      const item = document.createElement("li");
+      item.className = "memory-item";
+      const title = document.createElement("span");
+      title.className = "memory-item-title";
+      title.textContent = `${source.referenceId || "R?"}: ${source.title || source.url || "(source)"}`;
+      const meta = document.createElement("span");
+      meta.className = "memory-item-meta";
+      meta.textContent = `turn ${source.turn || 0} • conf ${Number(source.confidence || 0).toFixed(2)}`;
+      item.appendChild(title);
+      item.appendChild(meta);
+      citationSourceListEl.appendChild(item);
+    }
+  }
+
+  if (!claims.length) {
+    citationClaimListEl.appendChild(createListEmpty("No cited claims yet."));
+  } else {
+    for (const claim of claims.slice(0, 24)) {
+      const item = document.createElement("li");
+      item.className = "memory-item";
+      const title = document.createElement("span");
+      title.className = "memory-item-title";
+      title.textContent = `${claim.citationId || "R?"}: ${claim.claimText || "(claim)"}`;
+      const meta = document.createElement("span");
+      meta.className = "memory-item-meta";
+      meta.textContent = `turn ${claim.turn || 0} • ${claim.speakerId || "agent"} • conf ${Number(
+        claim.confidence || 0
+      ).toFixed(2)}`;
+      item.appendChild(title);
+      item.appendChild(meta);
+      citationClaimListEl.appendChild(item);
+    }
+  }
+
+  const stats = citations.stats || {};
+  setCitationStatus(
+    `sources ${Number(stats.sourceCount || sources.length)} • claims ${Number(
+      stats.claimCount || claims.length
+    )} • avg conf ${(Number(stats.confidenceAvg || 0) * 100).toFixed(0)}`
+  );
+}
+
+function toCitationMarkdown() {
+  if (!citationState) {
+    return "";
+  }
+
+  const lines = [
+    "# Citation Tracker",
+    "",
+    `- Topic: ${activeTopic || topicInput.value.trim() || "n/a"}`,
+    `- Conversation ID: ${activeConversationId || "n/a"}`,
+    "",
+    "## Sources",
+    ...(citationState.sources?.length
+      ? citationState.sources.map(
+          (source) =>
+            `- ${source.referenceId || "R?"} (turn ${source.turn || 0}, conf ${Number(source.confidence || 0).toFixed(
+              2
+            )}): ${source.title} — ${source.url}`
+        )
+      : ["- None yet"]),
+    "",
+    "## Cited Claims",
+    ...(citationState.claims?.length
+      ? citationState.claims.map(
+          (claim) =>
+            `- Turn ${claim.turn || 0} ${claim.speakerId || "agent"} [${claim.citationId || "R?"}] conf ${Number(
+              claim.confidence || 0
+            ).toFixed(2)}: ${claim.claimText}`
+        )
+      : ["- None yet"])
+  ];
+
+  return lines.join("\n");
+}
+
+async function refreshCitationTracker() {
+  if (!activeConversationId) {
+    clearCitationTracker();
+    return;
+  }
+
+  setCitationStatus("Refreshing citations...");
+  try {
+    const result = await fetchJson(`/api/conversation/${encodeURIComponent(activeConversationId)}/citations`);
+    renderCitationTracker(result);
+  } catch (error) {
+    clearCitationTracker("Citation data unavailable.");
+  }
+}
+
 function renderScoreItems(score) {
   scoreComponentsListEl.innerHTML = "";
   const components = score?.components || {};
@@ -747,6 +876,7 @@ async function refreshThreadIntelligence(options = {}) {
   await refreshMemoryInspector();
   await refreshInsightSnapshot();
   await refreshDiscoveryRadar();
+  await refreshCitationTracker();
   await refreshScorecard();
   if (options.withHistory) {
     await loadHistory();
@@ -917,7 +1047,10 @@ function setQualityChip(quality) {
   const score = Number(qualityState.avgScore || 0);
   const evaluatorScore = Number(qualityState.evaluatorAvgScore || 0);
   const retries = Number(qualityState.retriesUsed || 0);
-  qualityChipEl.textContent = `Quality: ${(score * 100).toFixed(0)} • eval ${(evaluatorScore * 100).toFixed(0)} • retries ${retries}`;
+  const citedClaims = Number(qualityState.citedClaims || 0);
+  qualityChipEl.textContent = `Quality: ${(score * 100).toFixed(0)} • eval ${(evaluatorScore * 100).toFixed(
+    0
+  )} • cites ${citedClaims} • retries ${retries}`;
 }
 
 function setConversationState(conversationId, topic) {
@@ -1367,6 +1500,7 @@ async function restoreConversation() {
     clearMemoryInspector();
     clearInsightSnapshot();
     clearDiscoveryRadar();
+    clearCitationTracker();
     clearLabResults();
     clearScorecard();
     return;
@@ -1388,6 +1522,7 @@ async function restoreConversation() {
     clearMemoryInspector();
     clearInsightSnapshot();
     clearDiscoveryRadar();
+    clearCitationTracker();
     clearLabResults();
     clearScorecard();
   }
@@ -1434,6 +1569,7 @@ clearBtn.addEventListener("click", async () => {
   clearMemoryInspector();
   clearInsightSnapshot();
   clearDiscoveryRadar();
+  clearCitationTracker();
   clearLabResults();
   clearScorecard();
   await loadHistory();
@@ -1449,6 +1585,10 @@ refreshInsightsBtn.addEventListener("click", async () => {
 
 refreshDiscoveriesBtn.addEventListener("click", async () => {
   await refreshDiscoveryRadar();
+});
+
+refreshCitationsBtn.addEventListener("click", async () => {
+  await refreshCitationTracker();
 });
 
 refreshScoreBtn.addEventListener("click", async () => {
@@ -1552,6 +1692,21 @@ copyDiscoveriesBtn.addEventListener("click", async () => {
     setStatus("Discovery radar copied.");
   } catch (error) {
     setStatus("Clipboard blocked. Could not copy discovery radar.");
+  }
+});
+
+copyCitationsBtn.addEventListener("click", async () => {
+  const markdown = toCitationMarkdown();
+  if (!markdown) {
+    setStatus("No citation report to copy yet.");
+    return;
+  }
+
+  try {
+    await navigator.clipboard.writeText(markdown);
+    setStatus("Citation report copied.");
+  } catch (error) {
+    setStatus("Clipboard blocked. Could not copy citation report.");
   }
 });
 
@@ -1734,6 +1889,7 @@ form.addEventListener("submit", async (event) => {
     clearMemoryInspector("Switched topic. Memory will rebuild for the new thread.");
     clearInsightSnapshot("Switched topic. Insights will rebuild for the new thread.");
     clearDiscoveryRadar("Switched topic. Discovery radar will rebuild for the new thread.");
+    clearCitationTracker("Switched topic. Citation tracker will rebuild for the new thread.");
     clearLabResults("Switched topic. Run Discovery Lab again for this topic.");
     clearScorecard("Switched topic. Score will rebuild for the new thread.");
   }
@@ -1845,6 +2001,14 @@ form.addEventListener("submit", async (event) => {
         return;
       }
 
+      if (chunk.type === "references") {
+        const count = Array.isArray(chunk.references) ? chunk.references.length : 0;
+        if (count > 0) {
+          setCitationStatus(`Loaded ${count} references for turn ${chunk.turn}.`);
+        }
+        return;
+      }
+
       if (chunk.type === "moderator") {
         moderatorHint = chunk.moderation?.directive || "";
         if (moderatorHint) {
@@ -1906,7 +2070,9 @@ form.addEventListener("submit", async (event) => {
       stopReason && stopReason !== "max_turns" ? ` Stop reason: ${stopReason}.` : "";
     const moderatorSuffix = moderatorHint ? ` Last moderator hint: ${moderatorHint}` : "";
     const qualitySuffix = qualitySummary
-      ? ` Quality ${(Number(qualitySummary.avgScore || 0) * 100).toFixed(0)} with ${qualitySummary.retriesUsed || 0} retries.`
+      ? ` Quality ${(Number(qualitySummary.avgScore || 0) * 100).toFixed(0)} with ${
+          qualitySummary.retriesUsed || 0
+        } retries and ${Number(qualitySummary.citedClaims || 0)} cited claims.`
       : "";
 
     setStatus(
@@ -1921,6 +2087,7 @@ form.addEventListener("submit", async (event) => {
       clearMemoryInspector();
       clearInsightSnapshot();
       clearDiscoveryRadar();
+      clearCitationTracker();
       clearLabResults();
       clearScorecard();
       await loadHistory();
@@ -1941,6 +2108,7 @@ setAgentFields(null);
 clearMemoryInspector();
 clearInsightSnapshot();
 clearDiscoveryRadar();
+clearCitationTracker();
 clearLabResults();
 clearScorecard();
 restoreDraftState();

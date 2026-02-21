@@ -46,6 +46,10 @@ Modern web app where two AI agents discuss a user topic in 10-turn batches while
   - generated hypotheses from semantic memory
   - experiment protocols with success/failure signals
   - discovery risk map + novelty score
+- Citation-backed debate mode:
+  - retrieves source notes for factual threads
+  - enforces `[R#]` source-linked claims in debate turns
+  - tracks claim confidence and source coverage in Citation Tracker
 - Objective Scorecard panel:
   - progress percentage toward completion
   - component breakdown (coverage, decisions, done signal, resolution)
@@ -104,6 +108,11 @@ Open `http://localhost:3000`.
 - `EVALUATOR_MIN_NOVELTY`: minimum novelty score per turn (default `0.22`)
 - `EVALUATOR_MIN_COHERENCE`: minimum coherence score per turn (default `0.26`)
 - `EVALUATOR_MIN_EVIDENCE`: minimum evidence quality score in debate mode (default `0.24`)
+- `CITATION_RETRIEVAL_ENABLED`: enable citation retrieval in debate mode (default `true`)
+- `CITATION_MAX_REFERENCES`: max references retrieved per refresh (default `4`)
+- `CITATION_REFRESH_INTERVAL`: refresh references every N generated turns (default `3`)
+- `CITATION_TIMEOUT_MS`: per-request timeout for citation retrieval calls (default `4500`)
+- `CITATION_MIN_REFERENCE_CONFIDENCE`: minimum confidence to keep a retrieved source (default `0.18`)
 - `MAX_TURN_CHARS`: max characters stored per generated turn after normalization (default `1400`)
 - `RATE_LIMIT_WINDOW_MS`: API rate limit window in milliseconds (default `60000`)
 - `RATE_LIMIT_MAX_REQUESTS`: max API requests per client IP per window (default `180`)
@@ -160,6 +169,7 @@ Response includes generated turns, total turns, memory stats, title/starred/mode
 Same behavior as `POST /api/conversation`, but returns newline-delimited JSON chunks for live UI updates:
 
 - `meta`: conversation info, engine, memory stats, title/starred/mode, brief, agents, charter, guardrails
+- `references`: retrieved citation notes for the next debate turn
 - `retry`: quality optimizer retry event
 - `turn`: one generated turn plus quality stats
 - `moderator`: moderator assessment/directive
@@ -254,6 +264,14 @@ Returns a discovery radar derived from transcript + compressed memory:
 - discovery risk map
 - novelty score and stage
 - next recommended discovery action
+
+### `GET /api/conversation/:id/citations`
+
+Returns citation-backed debate evidence for a conversation:
+
+- retrieved source notes (`sources[]`)
+- cited claims with linked source ids/URLs (`claims[]`)
+- confidence coverage stats (`sourceCount`, `claimCount`, `confidenceAvg`)
 
 ### `GET /api/conversation/:id/score`
 

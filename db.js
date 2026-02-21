@@ -91,6 +91,35 @@ db.exec(`
     FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
   );
 
+  CREATE TABLE IF NOT EXISTS retrieval_sources (
+    conversation_id TEXT NOT NULL,
+    turn INTEGER NOT NULL,
+    reference_id TEXT NOT NULL,
+    provider TEXT NOT NULL DEFAULT 'wikipedia',
+    title TEXT NOT NULL,
+    url TEXT NOT NULL,
+    snippet TEXT NOT NULL,
+    confidence REAL NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (conversation_id, turn, reference_id),
+    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE IF NOT EXISTS claim_citations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversation_id TEXT NOT NULL,
+    turn INTEGER NOT NULL,
+    speaker_id TEXT NOT NULL,
+    claim_text TEXT NOT NULL,
+    citation_id TEXT NOT NULL,
+    citation_title TEXT NOT NULL,
+    citation_url TEXT NOT NULL,
+    confidence REAL NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+    UNIQUE(conversation_id, turn, claim_text, citation_url)
+  );
+
   CREATE INDEX IF NOT EXISTS idx_memory_tokens_conversation_weight
     ON memory_tokens(conversation_id, weight DESC, last_turn DESC);
 
@@ -99,6 +128,12 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_semantic_memory_weight
     ON semantic_memory(conversation_id, item_type, weight DESC, last_turn DESC);
+
+  CREATE INDEX IF NOT EXISTS idx_retrieval_sources_turn
+    ON retrieval_sources(conversation_id, turn DESC, confidence DESC);
+
+  CREATE INDEX IF NOT EXISTS idx_claim_citations_turn
+    ON claim_citations(conversation_id, turn DESC, confidence DESC);
 `);
 
 function ensureColumnExists(tableName, columnName, typeSql) {
@@ -416,6 +451,90 @@ const listRecentSummariesStmt = db.prepare(`
   LIMIT ?
 `);
 
+const upsertRetrievalSourceStmt = db.prepare(`
+  INSERT INTO retrieval_sources (
+    conversation_id,
+    turn,
+    reference_id,
+    provider,
+    title,
+    url,
+    snippet,
+    confidence
+  )
+  VALUES (
+    @conversationId,
+    @turn,
+    @referenceId,
+    @provider,
+    @title,
+    @url,
+    @snippet,
+    @confidence
+  )
+  ON CONFLICT(conversation_id, turn, reference_id) DO UPDATE SET
+    provider = excluded.provider,
+    title = excluded.title,
+    url = excluded.url,
+    snippet = excluded.snippet,
+    confidence = excluded.confidence
+`);
+
+const listRecentRetrievalSourcesStmt = db.prepare(`
+  SELECT
+    turn,
+    reference_id AS referenceId,
+    provider,
+    title,
+    url,
+    snippet,
+    confidence,
+    created_at AS createdAt
+  FROM retrieval_sources
+  WHERE conversation_id = ?
+  ORDER BY turn DESC, reference_id ASC
+  LIMIT ?
+`);
+
+const insertClaimCitationStmt = db.prepare(`
+  INSERT OR IGNORE INTO claim_citations (
+    conversation_id,
+    turn,
+    speaker_id,
+    claim_text,
+    citation_id,
+    citation_title,
+    citation_url,
+    confidence
+  )
+  VALUES (
+    @conversationId,
+    @turn,
+    @speakerId,
+    @claimText,
+    @citationId,
+    @citationTitle,
+    @citationUrl,
+    @confidence
+  )
+`);
+
+const listRecentClaimCitationsStmt = db.prepare(`
+  SELECT
+    turn,
+    speaker_id AS speakerId,
+    claim_text AS claimText,
+    citation_id AS citationId,
+    citation_title AS citationTitle,
+    citation_url AS citationUrl,
+    confidence,
+    created_at AS createdAt
+  FROM claim_citations
+  WHERE conversation_id = ?
+  ORDER BY turn DESC, confidence DESC
+  LIMIT ?
+`);
+
 const insertMessagesTx = db.transaction((conversationId, entries) => {
   for (const entry of entries) {
     insertMessageStmt.run({
@@ -467,6 +586,36 @@ const upsertConversationAgentsTx = db.transaction((conversationId, agents) => {
       name: agent.name,
       style: agent.style,
       temperature: agent.temperature
+    });
+  }
+});
+
+const upsertRetrievalSourcesTx = db.transaction((conversationId, turn, sources) => {
+  for (const source of sources) {
+    upsertRetrievalSourceStmt.run({
+      conversationId,
+      turn,
+      referenceId: source.referenceId,
+      provider: source.provider || "wikipedia",
+      title: source.title || "",
+      url: source.url || "",
+      snippet: source.snippet || "",
+      confidence: Number(source.confidence || 0)
+    });
+  }
+});
+
+const insertClaimCitationsTx = db.transaction((conversationId, entries) => {
+  for (const entry of entries) {
+    insertClaimCitationStmt.run({
+      conversationId,
+      turn: entry.turn,
+      speakerId: entry.speakerId,
+      claimText: entry.claimText,
+      citationId: entry.citationId,
+      citationTitle: entry.citationTitle || "",
+      citationUrl: entry.citationUrl || "",
+      confidence: Number(entry.confidence || 0)
     });
   }
 });
@@ -602,6 +751,63 @@ function getTopSemanticItems(conversationId, limit = 24) {
   return listSemanticMemoryStmt.all(conversationId, safeLimit);
 }
 
+function upsertRetrievalSources(conversationId, turn, sources) {
+  if (!Array.isArray(sources) || sources.length === 0 || !Number.isFinite(Number(turn))) {
+    return;
+  }
+
+  const prepared = sources
+    .map((source) => ({
+      referenceId: String(source.id || source.referenceId || "").trim(),
+      provider: String(source.provider || "wikipedia").trim(),
+      title: String(source.title || "").trim().slice(0, 180),
+      url: String(source.url || "").trim().slice(0, 500),
+      snippet: String(source.snippet || "").replace(/\s+/g, " ").trim().slice(0, 320),
+      confidence: Number(source.confidence || 0)
+    }))
+    .filter((source) => source.referenceId && source.title && source.url);
+
+  if (!prepared.length) {
+    return;
+  }
+
+  upsertRetrievalSourcesTx(conversationId, Math.max(0, Math.trunc(Number(turn))), prepared);
+}
+
+function getRecentRetrievalSources(conversationId, limit = 30) {
+  const safeLimit = Math.max(1, Math.min(120, Number(limit) || 30));
+  return listRecentRetrievalSourcesStmt.all(conversationId, safeLimit);
+}
+
+function insertClaimCitations(conversationId, entries) {
+  if (!Array.isArray(entries) || !entries.length) {
+    return;
+  }
+
+  const prepared = entries
+    .map((entry) => ({
+      turn: Number.isFinite(Number(entry.turn)) ? Math.max(0, Math.trunc(Number(entry.turn))) : 0,
+      speakerId: String(entry.speakerId || "").trim().slice(0, 40),
+      claimText: String(entry.claimText || "").replace(/\s+/g, " ").trim().slice(0, 320),
+      citationId: String(entry.citationId || "").trim().slice(0, 24),
+      citationTitle: String(entry.citationTitle || "").replace(/\s+/g, " ").trim().slice(0, 180),
+      citationUrl: String(entry.citationUrl || "").trim().slice(0, 500),
+      confidence: Number(entry.confidence || 0)
+    }))
+    .filter((entry) => entry.turn > 0 && entry.speakerId && entry.claimText && entry.citationId && entry.citationUrl);
+
+  if (!prepared.length) {
+    return;
+  }
+
+  insertClaimCitationsTx(conversationId, prepared);
+}
+
+function getRecentClaimCitations(conversationId, limit = 60) {
+  const safeLimit = Math.max(1, Math.min(200, Number(limit) || 60));
+  return listRecentClaimCitationsStmt.all(conversationId, safeLimit);
+}
+
 function getMemoryStats(conversationId) {
   return getMemoryStatsStmt.get({ conversationId });
 }
@@ -636,6 +842,8 @@ export {
   getConversation,
   getConversationBrief,
   getConversationAgents,
+  getRecentClaimCitations,
+  getRecentRetrievalSources,
   getLastSummaryTurn,
   getMemoryStats,
   getMessages,
@@ -645,6 +853,7 @@ export {
   getTopMemoryTokens,
   getTopSemanticItems,
   insertMessages,
+  insertClaimCitations,
   insertSummary,
   listConversations,
   pruneMemoryTokens,
@@ -653,5 +862,6 @@ export {
   upsertConversationBrief,
   upsertConversationAgents,
   upsertMemoryTokens,
+  upsertRetrievalSources,
   upsertSemanticItems
 };

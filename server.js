@@ -10,11 +10,15 @@ import {
   getConversation,
   getConversationAgents,
   getConversationBrief,
+  getRecentClaimCitations,
+  getRecentRetrievalSources,
   getMessages,
   getMessagesUpToTurn,
+  insertClaimCitations,
   insertMessages,
   listConversations,
   updateConversationMeta,
+  upsertRetrievalSources,
   upsertConversationAgents,
   upsertConversationBrief
 } from "./db.js";
@@ -135,6 +139,11 @@ const EVALUATOR_MIN_OVERALL = readFloatEnv("EVALUATOR_MIN_OVERALL", 0.56, 0.2, 0
 const EVALUATOR_MIN_NOVELTY = readFloatEnv("EVALUATOR_MIN_NOVELTY", 0.22, 0.05, 0.9);
 const EVALUATOR_MIN_COHERENCE = readFloatEnv("EVALUATOR_MIN_COHERENCE", 0.26, 0.05, 0.95);
 const EVALUATOR_MIN_EVIDENCE = readFloatEnv("EVALUATOR_MIN_EVIDENCE", 0.24, 0.05, 0.95);
+const CITATION_RETRIEVAL_ENABLED = readBoolEnv("CITATION_RETRIEVAL_ENABLED", true);
+const CITATION_MAX_REFERENCES = readIntEnv("CITATION_MAX_REFERENCES", 4, 1, 8);
+const CITATION_REFRESH_INTERVAL = readIntEnv("CITATION_REFRESH_INTERVAL", 3, 1, 10);
+const CITATION_TIMEOUT_MS = readIntEnv("CITATION_TIMEOUT_MS", 4500, 1000, 20000);
+const CITATION_MIN_REFERENCE_CONFIDENCE = readFloatEnv("CITATION_MIN_REFERENCE_CONFIDENCE", 0.18, 0, 0.95);
 const MAX_TURN_CHARS = readIntEnv("MAX_TURN_CHARS", 1400, 300, 8000);
 const RATE_LIMIT_WINDOW_MS = readIntEnv("RATE_LIMIT_WINDOW_MS", 60000, 1000, 3600000);
 const RATE_LIMIT_MAX_REQUESTS = readIntEnv("RATE_LIMIT_MAX_REQUESTS", 180, 20, 5000);
@@ -402,8 +411,8 @@ function claimLikeSentenceCount(text) {
 }
 
 function extractCitationIds(text) {
-  const matches = String(text || "").match(/\[(R\d+)\]/gi) || [];
-  return [...new Set(matches.map((item) => item.toUpperCase()))];
+  const matches = [...String(text || "").matchAll(/\[(R\d+)\]/gi)];
+  return [...new Set(matches.map((item) => String(item?.[1] || "").toUpperCase()).filter(Boolean))];
 }
 
 function getQualityKeywordSet(topic, brief) {
@@ -468,6 +477,15 @@ function evaluateEvidenceQuality({ text, mode, referenceMap }) {
   if (mode !== "debate") {
     return {
       score: 1,
+      citationCount: 0,
+      claimSentences: claimLikeSentenceCount(text),
+      citedReferenceCount: 0
+    };
+  }
+
+  if (!referenceMap || referenceMap.size === 0) {
+    return {
+      score: 0.55,
       citationCount: 0,
       claimSentences: claimLikeSentenceCount(text),
       citedReferenceCount: 0
@@ -572,6 +590,190 @@ function evaluateTurnSignals({ text, previousText, recentTranscript, keywordSet,
   };
 }
 
+function stripHtml(input) {
+  return String(input || "")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function buildCitationQuery({ topic, brief, transcript }) {
+  const recent = (transcript || [])
+    .slice(-4)
+    .map((entry) => entry.text)
+    .join(" ");
+  const source = [topic, brief?.objective, brief?.constraintsText, recent].filter(Boolean).join(" ");
+  const words = normalizeText(source)
+    .split(" ")
+    .filter((token) => token.length >= 4)
+    .slice(0, 18);
+
+  return uniqueLines(words, 12).join(" ");
+}
+
+async function fetchJsonWithTimeout(url, timeoutMs = 4500) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    if (!response.ok) {
+      return null;
+    }
+    return await response.json();
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function retrieveWikipediaReferences({ query, maxReferences }) {
+  const trimmedQuery = String(query || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 240);
+  if (!trimmedQuery) {
+    return [];
+  }
+
+  const searchUrl = new URL("https://en.wikipedia.org/w/api.php");
+  searchUrl.searchParams.set("action", "query");
+  searchUrl.searchParams.set("format", "json");
+  searchUrl.searchParams.set("list", "search");
+  searchUrl.searchParams.set("utf8", "1");
+  searchUrl.searchParams.set("origin", "*");
+  searchUrl.searchParams.set("srlimit", String(maxReferences));
+  searchUrl.searchParams.set("srsearch", trimmedQuery);
+
+  const searchPayload = await fetchJsonWithTimeout(searchUrl.toString(), CITATION_TIMEOUT_MS);
+  const hits = Array.isArray(searchPayload?.query?.search) ? searchPayload.query.search : [];
+  if (!hits.length) {
+    return [];
+  }
+
+  const topHits = hits.slice(0, maxReferences);
+  const details = await Promise.all(
+    topHits.map(async (hit) => {
+      const title = String(hit?.title || "").trim();
+      if (!title) {
+        return null;
+      }
+
+      const summaryUrl = `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`;
+      const summaryPayload = await fetchJsonWithTimeout(summaryUrl, CITATION_TIMEOUT_MS);
+      const snippet = stripHtml(summaryPayload?.extract || hit?.snippet || "");
+      const canonicalUrl = String(summaryPayload?.content_urls?.desktop?.page || "").trim();
+      const url = canonicalUrl || `https://en.wikipedia.org/wiki/${encodeURIComponent(title.replace(/\s+/g, "_"))}`;
+      const score = Number(hit?.score || 0);
+      const rank = topHits.findIndex((entry) => entry?.title === title);
+      const rankConfidence = clamp(0.85 - rank * 0.12, 0.2, 0.9);
+      const textConfidence = clamp(Math.min(1, snippet.length / 240) * 0.4 + rankConfidence * 0.6, 0.12, 0.95);
+
+      return {
+        title,
+        url,
+        snippet: snippet.slice(0, 260),
+        confidence: Number(clamp((score > 0 ? textConfidence : textConfidence * 0.92), 0, 1).toFixed(4))
+      };
+    })
+  );
+
+  return details
+    .filter((item) => item && item.url && item.confidence >= CITATION_MIN_REFERENCE_CONFIDENCE)
+    .slice(0, maxReferences)
+    .map((item, index) => ({
+      id: `R${index + 1}`,
+      provider: "wikipedia",
+      title: item.title,
+      url: item.url,
+      snippet: item.snippet,
+      confidence: item.confidence
+    }));
+}
+
+async function retrieveDebateReferences({ topic, brief, transcript }) {
+  if (!CITATION_RETRIEVAL_ENABLED) {
+    return [];
+  }
+
+  const query = buildCitationQuery({ topic, brief, transcript });
+  if (!query) {
+    return [];
+  }
+
+  return retrieveWikipediaReferences({
+    query,
+    maxReferences: CITATION_MAX_REFERENCES
+  });
+}
+
+function buildReferenceBlock(references) {
+  if (!Array.isArray(references) || references.length === 0) {
+    return "Reference notes: (none available)";
+  }
+
+  return [
+    "Reference notes (cite as [R#] for factual claims):",
+    ...references.map((reference) =>
+      `${reference.id} | ${reference.title} | conf ${Number(reference.confidence || 0).toFixed(2)} | ${reference.url} | ${reference.snippet}`
+    )
+  ].join("\n");
+}
+
+function extractCitedClaims({ text, turn, speakerId, references }) {
+  const referenceMap = new Map(
+    (references || [])
+      .filter((reference) => reference?.id)
+      .map((reference) => [String(reference.id || "").toUpperCase(), reference])
+  );
+  if (!referenceMap.size) {
+    return [];
+  }
+
+  const sentences = String(text || "")
+    .split(/(?<=[.!?])\s+/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 6);
+  const claims = [];
+
+  for (const sentence of sentences) {
+    const citations = extractCitationIds(sentence);
+    if (!citations.length) {
+      continue;
+    }
+
+    const claimText = sentence.replace(/\[(R\d+)\]/gi, "").replace(/\s+/g, " ").trim().slice(0, 300);
+    if (!claimText) {
+      continue;
+    }
+
+    for (const citationId of citations) {
+      const reference = referenceMap.get(citationId);
+      if (!reference) {
+        continue;
+      }
+
+      claims.push({
+        turn,
+        speakerId,
+        claimText,
+        citationId,
+        citationTitle: reference.title || "",
+        citationUrl: reference.url || "",
+        confidence: Number(clamp(reference.confidence || 0, 0, 1).toFixed(4))
+      });
+    }
+  }
+
+  return claims;
+}
+
 function jaccardSimilarity(a, b) {
   if (!a || !b) {
     return 0;
@@ -604,13 +806,17 @@ function stripDonePrefix(text) {
     .trim();
 }
 
-function localTurn(topic, transcript, moderatorDirective, brief, mode = "exploration") {
+function localTurn(topic, transcript, moderatorDirective, brief, mode = "exploration", references = []) {
   const recent = transcript.slice(-2).map((entry) => entry.text).join(" ");
   const guidance = moderatorDirective
     ? `Moderator guidance: ${moderatorDirective}.`
     : "Moderator guidance: stay on-topic and add one concrete move.";
   const objectiveHint = brief?.objective ? `Primary objective: ${brief.objective}.` : "";
   const modeHint = DISCOVERY_MODE_HINTS[mode] || DISCOVERY_MODE_HINTS.exploration;
+  const citationHint =
+    mode === "debate" && Array.isArray(references) && references.length > 0
+      ? `Evidence note [R1]: ${references[0].title || references[0].url}.`
+      : "";
 
   const seeds = [
     `Let us stay focused on ${topic}. A practical angle is to define one core objective and test it quickly.`,
@@ -625,15 +831,15 @@ function localTurn(topic, transcript, moderatorDirective, brief, mode = "explora
     ? `I agree with the recent point: \"${recent.slice(0, 100)}...\"`
     : "Opening thought:";
 
-  return `${hook} ${objectiveHint} ${modeHint} ${guidance} ${seed}`;
+  return `${hook} ${objectiveHint} ${modeHint} ${guidance} ${citationHint} ${seed}`.replace(/\s+/g, " ").trim();
 }
 
-async function generateTurn({ topic, speaker, transcript, memory, moderatorDirective, brief, mode }) {
+async function generateTurn({ topic, speaker, transcript, memory, moderatorDirective, brief, mode, references }) {
   if (!client) {
-    return localTurn(topic, transcript, moderatorDirective, brief, mode);
+    return localTurn(topic, transcript, moderatorDirective, brief, mode, references);
   }
 
-  const prompt = buildContextBlock({
+  const basePrompt = buildContextBlock({
     topic,
     transcript,
     memory,
@@ -641,6 +847,7 @@ async function generateTurn({ topic, speaker, transcript, memory, moderatorDirec
     charter: DISCUSSION_CHARTER,
     brief
   });
+  const prompt = [basePrompt, buildReferenceBlock(references)].join("\n");
 
   const completion = await client.chat.completions.create({
     model,
@@ -653,7 +860,10 @@ async function generateTurn({ topic, speaker, transcript, memory, moderatorDirec
           speaker.style,
           DISCOVERY_MODE_HINTS[mode] || DISCOVERY_MODE_HINTS.exploration,
           "Maintain continuity and avoid topic drift.",
-          "Write only substantive content, no meta-commentary."
+          "Write only substantive content, no meta-commentary.",
+          mode === "debate"
+            ? "For factual claims, cite supporting references using [R#] from the provided reference notes."
+            : "Use reference notes when useful, but keep the response concise."
         ].join(" ")
       },
       {
@@ -665,7 +875,7 @@ async function generateTurn({ topic, speaker, transcript, memory, moderatorDirec
 
   return (
     completion.choices?.[0]?.message?.content?.trim() ||
-    localTurn(topic, transcript, moderatorDirective, brief, mode)
+    localTurn(topic, transcript, moderatorDirective, brief, mode, references)
   );
 }
 
@@ -1469,11 +1679,9 @@ async function runConversationBatch({
   const newEntries = [];
   const startedAt = Date.now();
   const qualityKeywordSet = getQualityKeywordSet(topic, brief);
-  const referenceMap = new Map(
-    (references || [])
-      .filter((item) => item?.id)
-      .map((item) => [String(item.id).toUpperCase(), item])
-  );
+  const citationMode = mode === "debate" && CITATION_RETRIEVAL_ENABLED;
+  let activeReferences = Array.isArray(references) ? references.filter((item) => item?.id) : [];
+  const citedClaims = [];
   const modeDefaultDirective =
     mode === "debate"
       ? "Debate the strongest opposing positions and expose the crux."
@@ -1491,6 +1699,9 @@ async function runConversationBatch({
   let evaluatorScoreTotal = 0;
   let evaluatorTurns = 0;
   let evaluatorRetries = 0;
+  let citationTurnCount = 0;
+  let citationClaimCount = 0;
+  let citationConfidenceTotal = 0;
 
   for (let i = 0; i < turns; i += 1) {
     if (Date.now() - startedAt > MAX_GENERATION_MS) {
@@ -1502,6 +1713,38 @@ async function runConversationBatch({
     const activeAgents = agents && agents.length ? agents : DEFAULT_AGENTS;
     const speaker = activeAgents[(nextTurn - 1) % activeAgents.length];
     const previous = transcript[transcript.length - 1];
+    let referenceMap = new Map(
+      activeReferences
+        .filter((item) => item?.id)
+        .map((item) => [String(item.id).toUpperCase(), item])
+    );
+
+    if (
+      citationMode &&
+      (i === 0 || i % CITATION_REFRESH_INTERVAL === 0 || activeReferences.length === 0)
+    ) {
+      try {
+        const retrieved = await retrieveDebateReferences({
+          topic,
+          brief,
+          transcript
+        });
+        if (retrieved.length > 0) {
+          activeReferences = retrieved;
+          referenceMap = new Map(retrieved.map((item) => [String(item.id).toUpperCase(), item]));
+          upsertRetrievalSources(conversationId, nextTurn, activeReferences);
+          if (writeChunk) {
+            writeChunk({
+              type: "references",
+              turn: nextTurn,
+              references: activeReferences
+            });
+          }
+        }
+      } catch {
+        // Ignore retrieval failures and continue with existing references.
+      }
+    }
 
     let entry = null;
     let signaledDone = false;
@@ -1530,7 +1773,8 @@ async function runConversationBatch({
         transcript,
         memory,
         moderatorDirective: attemptDirective,
-        brief
+        brief,
+        references: activeReferences
       });
 
       signaledDone = containsDoneToken(generated);
@@ -1596,6 +1840,22 @@ async function runConversationBatch({
         ? repetitionStreak + 1
         : 0;
 
+    if (citationMode && evaluator?.citationCount > 0) {
+      citationTurnCount += 1;
+    }
+
+    const turnCitations = extractCitedClaims({
+      text: entry?.text,
+      turn: nextTurn,
+      speakerId: speaker.id,
+      references: activeReferences
+    });
+    if (turnCitations.length > 0) {
+      citationClaimCount += turnCitations.length;
+      citationConfidenceTotal += turnCitations.reduce((sum, item) => sum + Number(item.confidence || 0), 0);
+      citedClaims.push(...turnCitations);
+    }
+
     transcript.push(entry);
     newEntries.push(entry);
 
@@ -1610,7 +1870,8 @@ async function runConversationBatch({
           attempts,
           accepted,
           repetitionStreak
-        }
+        },
+        references: citationMode ? activeReferences : []
       });
     }
 
@@ -1649,6 +1910,9 @@ async function runConversationBatch({
   }
 
   insertMessages(conversationId, newEntries);
+  if (citedClaims.length > 0) {
+    insertClaimCitations(conversationId, citedClaims);
+  }
   const memoryStats = await finalizeMemory(conversationId, topic, newEntries, transcript.length);
 
   return {
@@ -1662,8 +1926,15 @@ async function runConversationBatch({
       evaluatorAvgScore: Number((evaluatorTurns ? evaluatorScoreTotal / evaluatorTurns : 0).toFixed(4)),
       retriesUsed,
       evaluatorRetries,
-      turnsEvaluated: qualityTurns
-    }
+      turnsEvaluated: qualityTurns,
+      citationMode,
+      citedTurns: citationTurnCount,
+      citedClaims: citationClaimCount,
+      citationConfidenceAvg: Number(
+        (citationClaimCount > 0 ? citationConfidenceTotal / citationClaimCount : 0).toFixed(4)
+      )
+    },
+    references: citationMode ? activeReferences : []
   };
 }
 
@@ -1900,6 +2171,43 @@ app.get("/api/conversation/:id/discoveries", (req, res) => {
   return res.json(withConversationMeta(conversationId, conversation, { brief, discoveries }));
 });
 
+app.get("/api/conversation/:id/citations", (req, res) => {
+  const resolved = resolveConversationFromParams(req, res);
+  if (!resolved) {
+    return;
+  }
+  const { conversationId, conversation } = resolved;
+
+  const sources = getRecentRetrievalSources(conversationId, 60);
+  const claims = getRecentClaimCitations(conversationId, 120);
+  const sourceMap = new Map();
+  for (const source of sources) {
+    const key = `${source.referenceId}:${source.url}`;
+    if (!sourceMap.has(key)) {
+      sourceMap.set(key, source);
+    }
+  }
+  const uniqueSources = [...sourceMap.values()].slice(0, 24);
+  const confidenceAvg =
+    claims.length > 0
+      ? claims.reduce((sum, claim) => sum + Number(claim.confidence || 0), 0) / claims.length
+      : 0;
+
+  return res.json(
+    withConversationMeta(conversationId, conversation, {
+      citations: {
+        sources: uniqueSources,
+        claims: claims.slice(0, 80),
+        stats: {
+          sourceCount: uniqueSources.length,
+          claimCount: claims.length,
+          confidenceAvg: Number(clamp(confidenceAvg, 0, 1).toFixed(4))
+        }
+      }
+    })
+  );
+});
+
 app.get("/api/conversation/:id/score", (req, res) => {
   const resolved = resolveConversationFromParams(req, res);
   if (!resolved) {
@@ -2054,6 +2362,7 @@ app.post("/api/conversation/lab", async (req, res) => {
         totalTurns: batch.totalTurns,
         stopReason: batch.stopReason,
         quality: batch.qualitySummary,
+        references: batch.references,
         memory: batch.memoryStats,
         insights
       });
@@ -2120,6 +2429,12 @@ app.post("/api/conversation/stream", async (req, res) => {
           minNovelty: EVALUATOR_MIN_NOVELTY,
           minCoherence: EVALUATOR_MIN_COHERENCE,
           minEvidence: EVALUATOR_MIN_EVIDENCE
+        },
+        citations: {
+          enabled: mode === "debate" && CITATION_RETRIEVAL_ENABLED,
+          provider: "wikipedia",
+          maxReferences: CITATION_MAX_REFERENCES,
+          refreshInterval: CITATION_REFRESH_INTERVAL
         }
       }
     });
@@ -2149,7 +2464,8 @@ app.post("/api/conversation/stream", async (req, res) => {
       totalTurns: batch.totalTurns,
       stopReason: batch.stopReason,
       memory: batch.memoryStats,
-      quality: batch.qualitySummary
+      quality: batch.qualitySummary,
+      references: batch.references
     });
     res.end();
   } catch (error) {
@@ -2196,7 +2512,8 @@ app.post("/api/conversation", async (req, res) => {
       engine: getEngineLabel(),
       transcript: batch.newEntries,
       memory: batch.memoryStats,
-      quality: batch.qualitySummary
+      quality: batch.qualitySummary,
+      references: batch.references
     });
   } catch (error) {
     console.error(error);

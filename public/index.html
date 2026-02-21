@@ -220,6 +220,28 @@
           </section>
           <section class="insight-panel">
             <div class="memory-inspector-topbar">
+              <h3>Citation Tracker</h3>
+              <div class="thread-actions">
+                <button id="refresh-citations-btn" class="secondary" type="button">Refresh citations</button>
+                <button id="copy-citations-btn" class="secondary" type="button">Copy citations</button>
+              </div>
+            </div>
+            <p id="citation-status" class="memory-inspector-status">
+              Start or restore a debate thread to track cited claims and confidence.
+            </p>
+            <div class="memory-inspector-grid">
+              <article class="memory-card">
+                <h4>Sources</h4>
+                <ul id="citation-source-list" class="memory-list"></ul>
+              </article>
+              <article class="memory-card">
+                <h4>Cited claims</h4>
+                <ul id="citation-claim-list" class="memory-list"></ul>
+              </article>
+            </div>
+          </section>
+          <section class="insight-panel">
+            <div class="memory-inspector-topbar">
               <h3>Discovery Lab</h3>
               <div class="thread-actions">
                 <button id="open-best-lab-btn" class="secondary" type="button">Open best run</button>
