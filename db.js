@@ -465,6 +465,7 @@ const getMemoryStatsStmt = db.prepare(`
     COALESCE((SELECT COUNT(*) FROM tier_summaries WHERE conversation_id = @conversationId AND tier = 'meso'), 0) AS mesoSummaryCount,
     COALESCE((SELECT COUNT(*) FROM tier_summaries WHERE conversation_id = @conversationId AND tier = 'macro'), 0) AS macroSummaryCount,
     COALESCE((SELECT COUNT(*) FROM semantic_memory WHERE conversation_id = @conversationId), 0) AS semanticCount,
+    COALESCE((SELECT COUNT(*) FROM semantic_memory WHERE conversation_id = @conversationId AND item_type = 'hypothesis'), 0) AS hypothesisCount,
     COALESCE((SELECT COUNT(*) FROM semantic_memory WHERE conversation_id = @conversationId AND item_type = 'decision'), 0) AS decisionCount,
     COALESCE((SELECT COUNT(*) FROM semantic_memory WHERE conversation_id = @conversationId AND item_type = 'open_question'), 0) AS openQuestionCount,
     COALESCE((SELECT COUNT(*) FROM semantic_memory WHERE conversation_id = @conversationId AND item_type = 'constraint'), 0) AS constraintCount,

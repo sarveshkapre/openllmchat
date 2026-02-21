@@ -239,6 +239,10 @@ function classifySemanticSentence(sentence) {
     return { itemType: "open_question", confidence: 0.62, status: "open" };
   }
 
+  if (/\b(hypothesis|hypothesize|hypothesized|theory|we suspect|we predict|i predict|suggests that)\b/.test(lower)) {
+    return { itemType: "hypothesis", confidence: 0.67, status: "active" };
+  }
+
   if (/\b(we should|we need to|we will|let's|i propose|we agree|decision|decide|agreed)\b/.test(lower)) {
     return { itemType: "decision", confidence: 0.68, status: "active" };
   }
@@ -735,6 +739,7 @@ async function runMemoryAgent({ conversationId, topic, newEntries, totalTurns, c
 
 function groupSemanticItems(semantic) {
   return {
+    hypotheses: semantic.filter((item) => item.itemType === "hypothesis").slice(0, 6),
     decisions: semantic.filter((item) => item.itemType === "decision").slice(0, 6),
     constraints: semantic.filter((item) => item.itemType === "constraint").slice(0, 6),
     definitions: semantic.filter((item) => item.itemType === "definition").slice(0, 6),
@@ -786,6 +791,7 @@ function buildContextBlock({ topic, transcript, memory, moderatorDirective, char
     macro: []
   };
   const grouped = memory.groupedSemantic || {
+    hypotheses: [],
     decisions: [],
     constraints: [],
     definitions: [],
@@ -838,6 +844,8 @@ function buildContextBlock({ topic, transcript, memory, moderatorDirective, char
       : "Macro memory: (no macro compaction yet)",
     "Semantic memory: decisions",
     formatSemanticLines(grouped.decisions),
+    "Semantic memory: hypotheses",
+    formatSemanticLines(grouped.hypotheses),
     "Semantic memory: constraints",
     formatSemanticLines(grouped.constraints),
     "Semantic memory: definitions",
@@ -853,9 +861,11 @@ function buildContextBlock({ topic, transcript, memory, moderatorDirective, char
     "Instructions:",
     "1) Continue only this topic.",
     "2) Reuse relevant high-value memory when answering.",
-    "3) Keep reply to 1-3 sentences.",
-    "4) Add one concrete next-step idea.",
-    "5) If the objective is completed, start the reply with DONE: and a concise closing statement."
+    "3) Keep reply to 2-4 conversational sentences.",
+    "4) Respond to the previous point directly, then add one fresh relevant idea.",
+    "5) Avoid repetitive template openers and formal proposal wording every turn.",
+    "6) Suggest a concrete next step only when it naturally moves the thread forward.",
+    "7) If the objective is completed, start the reply with DONE: and a concise closing statement."
   ].join("\n");
 }
 

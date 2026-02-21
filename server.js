@@ -92,13 +92,14 @@ const DISCUSSION_CHARTER = [
   "If drifting, explicitly steer back to the topic.",
   "Ask clarifying questions rather than changing topics.",
   "Avoid repetitive phrasing and low-information filler.",
-  "Focus on claims, constraints, decisions, and unresolved questions."
+  "Focus on claims, constraints, decisions, and unresolved questions.",
+  "Keep the tone natural and conversational, not repetitive or robotic."
 ];
 
 const DISCOVERY_MODE_SET = new Set(["exploration", "debate", "synthesis"]);
 const DISCOVERY_LAB_MODES = ["exploration", "debate", "synthesis"];
 const DISCOVERY_MODE_HINTS = {
-  exploration: "Mode: exploration. Generate novel hypotheses and testable experiments.",
+  exploration: "Mode: exploration. Introduce fresh angles, concrete examples, and practical experiments.",
   debate: "Mode: debate. Surface strongest pro/con arguments and identify the core crux.",
   synthesis: "Mode: synthesis. Converge on decisions, tradeoffs, and an executable action plan."
 };
@@ -842,33 +843,32 @@ function turnTakingContextBlock(topic, transcript) {
 
 function localTurn(topic, transcript, moderatorDirective, brief, mode = "exploration", references = []) {
   const previous = transcript[transcript.length - 1];
-  const recent = transcript.slice(-2).map((entry) => entry.text).join(" ");
   const guidance = moderatorDirective
     ? `Moderator guidance: ${moderatorDirective}.`
-    : "Moderator guidance: stay on-topic and add one concrete move.";
+    : "Moderator guidance: stay on-topic and add one concrete point.";
   const objectiveHint = brief?.objective ? `Primary objective: ${brief.objective}.` : "";
   const modeHint = DISCOVERY_MODE_HINTS[mode] || DISCOVERY_MODE_HINTS.exploration;
   const citationHint =
     mode === "debate" && Array.isArray(references) && references.length > 0
       ? `Evidence note [R1]: ${references[0].title || references[0].url}.`
       : "";
+  const previousSnippet = previous ? compactLine(previous.text, 120) : "";
 
-  const seeds = [
-    `Let us stay focused on ${topic}. A practical angle is to define one core objective and test it quickly.`,
-    "Building on that, we should preserve context by carrying forward the prior point and tightening scope each turn.",
-    "A relevant constraint is user experience: concise messages, clear sequencing, and consistent topic anchoring.",
-    "A useful next move is to convert this into a lightweight loop where each reply references the previous claim.",
-    "To keep relevance high, we can enforce a shared memory summary and include it in every generation step."
+  const starters = [
+    `My first take on ${topic} is that we should keep one clear objective and pressure-test it with concrete examples.`,
+    `On ${topic}, I'd start from the biggest constraint and then choose one practical path to test quickly.`,
+    `For ${topic}, the strongest move is to pick one measurable claim, not a broad theory, and iterate from there.`
+  ];
+  const followUps = [
+    `I hear your point about "${previousSnippet}", and I agree with the direction; the tradeoff we still need to resolve is speed versus depth.`,
+    `That's a useful point about "${previousSnippet}". I'd sharpen it by naming one assumption we can challenge next.`,
+    `Good call on "${previousSnippet}". The missing piece is one concrete example that would prove or disprove the claim.`
   ];
 
-  const seed = seeds[transcript.length % seeds.length];
-  const hook = previous
-    ? `Responding to ${previous.speaker}'s point,`
-    : "Opening thought:";
+  const seedSource = previous ? followUps : starters;
+  const seed = seedSource[transcript.length % seedSource.length];
 
-  return `${hook} ${objectiveHint} ${modeHint} ${guidance} ${citationHint} ${seed} ${
-    previous ? `This directly builds on: "${recent.slice(0, 100)}..."` : ""
-  }`
+  return `${seed} ${objectiveHint} ${modeHint} ${guidance} ${citationHint}`
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -905,6 +905,10 @@ async function generateTurn({ topic, speaker, transcript, memory, moderatorDirec
           "Maintain continuity and avoid topic drift.",
           "Turn-taking rule: respond to the previous agent reply before introducing your new point.",
           "When a previous reply exists, directly address it in your first sentence.",
+          "Write 2-4 conversational sentences in plain language, without bullets.",
+          "Sound like a thoughtful colleague, not a formal report writer.",
+          "Avoid repetitive template openers like 'Agent X's point' or 'Building on that' in every turn.",
+          "Prefer concrete claims, examples, or tradeoffs over generic process talk.",
           "Write only substantive content, no meta-commentary.",
           mode === "debate"
             ? "For factual claims, cite supporting references using [R#] from the provided reference notes."
@@ -1172,12 +1176,14 @@ function compactLine(text, maxLen = 220) {
 
 function buildInsightSnapshot({ topic, brief, mode, memory }) {
   const grouped = memory?.groupedSemantic || {
+    hypotheses: [],
     decisions: [],
     constraints: [],
     definitions: [],
     openQuestions: []
   };
 
+  const hypotheses = semanticLines(grouped.hypotheses, 4);
   const decisions = semanticLines(grouped.decisions, 4);
   const constraints = semanticLines(grouped.constraints, 4);
   const definitions = semanticLines(grouped.definitions, 3);
@@ -1202,12 +1208,14 @@ function buildInsightSnapshot({ topic, brief, mode, memory }) {
     topic,
     mode,
     objective: brief?.objective || "",
+    hypotheses,
     decisions,
     constraints,
     definitions,
     openQuestions,
     nextSteps,
     stats: {
+      hypothesisCount: Number(memory?.stats?.hypothesisCount || 0),
       decisionCount: Number(memory?.stats?.decisionCount || 0),
       openQuestionCount: Number(memory?.stats?.openQuestionCount || 0),
       constraintCount: Number(memory?.stats?.constraintCount || 0),
@@ -1220,11 +1228,13 @@ function buildInsightSnapshot({ topic, brief, mode, memory }) {
 
 function buildDiscoveryRadar({ topic, brief, mode, memory, transcript }) {
   const grouped = memory?.groupedSemantic || {
+    hypotheses: [],
     decisions: [],
     constraints: [],
     definitions: [],
     openQuestions: []
   };
+  const hypothesesFromMemory = semanticLines(grouped.hypotheses, 6);
   const openQuestions = semanticLines(grouped.openQuestions, 6);
   const decisions = semanticLines(grouped.decisions, 6);
   const constraints = semanticLines(grouped.constraints, 4);
@@ -1235,6 +1245,7 @@ function buildDiscoveryRadar({ topic, brief, mode, memory, transcript }) {
     .filter(Boolean);
 
   const sourceSets = {
+    hypothesis: new Set(hypothesesFromMemory.map((line) => line.toLowerCase())),
     openQuestion: new Set(openQuestions.map((line) => line.toLowerCase())),
     decision: new Set(decisions.map((line) => line.toLowerCase())),
     constraint: new Set(constraints.map((line) => line.toLowerCase())),
@@ -1244,6 +1255,7 @@ function buildDiscoveryRadar({ topic, brief, mode, memory, transcript }) {
 
   const hypothesisSeeds = uniqueLines(
     [
+      ...hypothesesFromMemory,
       ...openQuestions,
       ...constraints,
       ...definitions,
@@ -1255,7 +1267,9 @@ function buildDiscoveryRadar({ topic, brief, mode, memory, transcript }) {
 
   const hypotheses = hypothesisSeeds.map((seed, index) => {
     const seedKey = seed.toLowerCase();
-    const sourceType = sourceSets.openQuestion.has(seedKey)
+    const sourceType = sourceSets.hypothesis.has(seedKey)
+      ? "hypothesis"
+      : sourceSets.openQuestion.has(seedKey)
       ? "open_question"
       : sourceSets.constraint.has(seedKey)
         ? "constraint"
@@ -1267,7 +1281,9 @@ function buildDiscoveryRadar({ topic, brief, mode, memory, transcript }) {
               ? "decision"
               : "objective";
     const statement =
-      sourceType === "open_question"
+      sourceType === "hypothesis"
+        ? `If the hypothesis "${compactLine(seed, 110)}" holds, we should observe measurable shifts in downstream decisions.`
+        : sourceType === "open_question"
         ? `If we resolve "${compactLine(seed, 110)}", the thread can unlock a higher-confidence decision.`
         : sourceType === "constraint"
           ? `A solution that satisfies "${compactLine(seed, 110)}" will outperform broader alternatives.`
@@ -1278,7 +1294,15 @@ function buildDiscoveryRadar({ topic, brief, mode, memory, transcript }) {
               : `Aligning execution with "${compactLine(seed, 110)}" should increase delivery certainty.`;
 
     const confidenceBase =
-      sourceType === "decision" ? 0.74 : sourceType === "constraint" ? 0.7 : sourceType === "open_question" ? 0.62 : 0.66;
+      sourceType === "hypothesis"
+        ? 0.76
+        : sourceType === "decision"
+          ? 0.74
+          : sourceType === "constraint"
+            ? 0.7
+            : sourceType === "open_question"
+              ? 0.62
+              : 0.66;
 
     return {
       id: `H${index + 1}`,
@@ -1455,12 +1479,16 @@ function parseJsonObject(text) {
 function localModeratorAssessment({ topic, transcript, brief, mode }) {
   const last = transcript[transcript.length - 1];
   const prev = transcript[transcript.length - 2];
+  const lastText = last?.text || "";
 
-  const repetitive = Boolean(prev && jaccardSimilarity(last?.text, prev?.text) > 0.88);
-  const tooShort = (normalizeText(last?.text).split(" ").filter(Boolean).length || 0) < 8;
-  const onTopic = normalizeText(last?.text).includes(normalizeText(topic).split(" ")[0] || "");
+  const templatePattern =
+    /\b(agent\s+[a-z0-9_-]+'s|building on (this|that)|a concrete next step would be|another hypothesis)\b/i;
+  const templatey = templatePattern.test(lastText);
+  const repetitive = Boolean(prev && jaccardSimilarity(lastText, prev?.text) > 0.88) || templatey;
+  const tooShort = (normalizeText(lastText).split(" ").filter(Boolean).length || 0) < 8;
+  const onTopic = normalizeText(lastText).includes(normalizeText(topic).split(" ")[0] || "");
   const done = brief?.doneCriteria
-    ? jaccardSimilarity(brief.doneCriteria, last?.text || "") >= 0.42
+    ? jaccardSimilarity(brief.doneCriteria, lastText) >= 0.42
     : false;
 
   let directive =
@@ -1471,6 +1499,8 @@ function localModeratorAssessment({ topic, transcript, brief, mode }) {
         : "Increase specificity with one concrete actionable point.";
   if (!onTopic) {
     directive = `Steer back to topic: ${topic}.`;
+  } else if (templatey) {
+    directive = "Drop template phrasing; respond naturally and add one concrete claim.";
   } else if (repetitive) {
     directive = "Avoid repeating prior wording; add a counterpoint or new evidence.";
   } else if (tooShort) {
@@ -1537,7 +1567,7 @@ async function runModerator({ topic, transcript, memory, currentDirective, brief
           recent,
           "Rules:",
           "- onTopic=false if recent turns drift from topic.",
-          "- repetitive=true if last turns repeat phrasing/claims.",
+          "- repetitive=true if last turns repeat phrasing/claims or use formulaic template wording.",
           "- tooShort=true if content lacks depth.",
           "- done=true only if objective appears complete.",
           "- directive must be one concise imperative sentence.",
