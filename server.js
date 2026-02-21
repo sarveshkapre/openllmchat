@@ -956,6 +956,23 @@ function resolveConversationFromParams(req, res) {
   return { conversationId, conversation };
 }
 
+function conversationMetaPayload(conversation) {
+  return {
+    topic: conversation.topic,
+    title: conversation.title || "",
+    starred: Boolean(conversation.starred),
+    mode: sanitizeConversationMode(conversation.mode, "exploration")
+  };
+}
+
+function withConversationMeta(conversationId, conversation, extra = {}) {
+  return {
+    conversationId,
+    ...conversationMetaPayload(conversation),
+    ...extra
+  };
+}
+
 function cloneTranscriptEntries(entries) {
   return (entries || []).map((entry) => ({
     turn: entry.turn,
@@ -1154,20 +1171,17 @@ app.get("/api/conversation/:id", (req, res) => {
   const brief = getConversationBrief(conversationId);
   const agents = mapStoredAgents(getConversationAgents(conversationId));
 
-  return res.json({
-    conversationId,
-    topic: conversation.topic,
-    title: conversation.title || "",
-    starred: Boolean(conversation.starred),
-    mode: sanitizeConversationMode(conversation.mode, "exploration"),
-    parentConversationId: conversation.parentConversationId || null,
-    forkFromTurn: Number.isFinite(conversation.forkFromTurn) ? conversation.forkFromTurn : null,
-    brief,
-    agents,
-    totalTurns: transcript.length,
-    transcript,
-    memory: memory.stats
-  });
+  return res.json(
+    withConversationMeta(conversationId, conversation, {
+      parentConversationId: conversation.parentConversationId || null,
+      forkFromTurn: Number.isFinite(conversation.forkFromTurn) ? conversation.forkFromTurn : null,
+      brief,
+      agents,
+      totalTurns: transcript.length,
+      transcript,
+      memory: memory.stats
+    })
+  );
 });
 
 app.post("/api/conversation/:id/fork", async (req, res) => {
@@ -1228,20 +1242,23 @@ app.post("/api/conversation/:id/fork", async (req, res) => {
     });
     const memory = getCompressedMemory(forkConversationId);
 
-    return res.json({
-      conversationId: forkConversationId,
+    const resolvedForkConversation = forkConversation || {
       topic: sourceConversation.topic,
-      title: forkConversation?.title || forkTitle,
-      starred: Boolean(forkConversation?.starred),
-      mode: sanitizeConversationMode(forkConversation?.mode, "exploration"),
-      brief: sourceBrief,
-      agents: sourceAgents,
-      parentConversationId: sourceConversationId,
-      forkFromTurn,
-      totalTurns: forkTranscript.length,
-      transcript: forkTranscript,
-      memory: memory.stats
-    });
+      title: forkTitle,
+      starred: false,
+      mode: sourceConversation.mode || "exploration"
+    };
+    return res.json(
+      withConversationMeta(forkConversationId, resolvedForkConversation, {
+        brief: sourceBrief,
+        agents: sourceAgents,
+        parentConversationId: sourceConversationId,
+        forkFromTurn,
+        totalTurns: forkTranscript.length,
+        transcript: forkTranscript,
+        memory: memory.stats
+      })
+    );
   } catch (error) {
     console.error(error);
     return res.status(500).json({ error: "Failed to fork conversation." });
@@ -1255,14 +1272,7 @@ app.get("/api/conversation/:id/brief", (req, res) => {
   }
   const { conversationId, conversation } = resolved;
 
-  return res.json({
-    conversationId,
-    topic: conversation.topic,
-    title: conversation.title || "",
-    starred: Boolean(conversation.starred),
-    mode: sanitizeConversationMode(conversation.mode, "exploration"),
-    brief: getConversationBrief(conversationId)
-  });
+  return res.json(withConversationMeta(conversationId, conversation, { brief: getConversationBrief(conversationId) }));
 });
 
 app.get("/api/conversation/:id/agents", (req, res) => {
@@ -1272,14 +1282,11 @@ app.get("/api/conversation/:id/agents", (req, res) => {
   }
   const { conversationId, conversation } = resolved;
 
-  return res.json({
-    conversationId,
-    topic: conversation.topic,
-    title: conversation.title || "",
-    starred: Boolean(conversation.starred),
-    mode: sanitizeConversationMode(conversation.mode, "exploration"),
-    agents: mapStoredAgents(getConversationAgents(conversationId))
-  });
+  return res.json(
+    withConversationMeta(conversationId, conversation, {
+      agents: mapStoredAgents(getConversationAgents(conversationId))
+    })
+  );
 });
 
 app.post("/api/conversation/:id/agents", (req, res) => {
@@ -1293,14 +1300,11 @@ app.post("/api/conversation/:id/agents", (req, res) => {
   const incomingAgents = parseAgentConfigFromBody(req.body);
   upsertConversationAgents(conversationId, mergeAgentConfig(currentAgents, incomingAgents));
 
-  return res.json({
-    conversationId,
-    topic: conversation.topic,
-    title: conversation.title || "",
-    starred: Boolean(conversation.starred),
-    mode: sanitizeConversationMode(conversation.mode, "exploration"),
-    agents: mapStoredAgents(getConversationAgents(conversationId))
-  });
+  return res.json(
+    withConversationMeta(conversationId, conversation, {
+      agents: mapStoredAgents(getConversationAgents(conversationId))
+    })
+  );
 });
 
 app.post("/api/conversation/:id/meta", (req, res) => {
@@ -1315,13 +1319,7 @@ app.post("/api/conversation/:id/meta", (req, res) => {
   updateConversationMeta(conversationId, mergedMeta);
   const updatedConversation = getConversation(conversationId);
 
-  return res.json({
-    conversationId,
-    topic: updatedConversation.topic,
-    title: updatedConversation.title || "",
-    starred: Boolean(updatedConversation.starred),
-    mode: sanitizeConversationMode(updatedConversation.mode, "exploration")
-  });
+  return res.json(withConversationMeta(conversationId, updatedConversation));
 });
 
 app.post("/api/conversation/:id/brief", (req, res) => {
@@ -1336,14 +1334,7 @@ app.post("/api/conversation/:id/brief", (req, res) => {
   const mergedBrief = mergeBriefPatch(currentBrief, req.body || {}, parsedBrief);
   upsertConversationBrief(conversationId, mergedBrief);
 
-  return res.json({
-    conversationId,
-    topic: conversation.topic,
-    title: conversation.title || "",
-    starred: Boolean(conversation.starred),
-    mode: sanitizeConversationMode(conversation.mode, "exploration"),
-    brief: getConversationBrief(conversationId)
-  });
+  return res.json(withConversationMeta(conversationId, conversation, { brief: getConversationBrief(conversationId) }));
 });
 
 app.get("/api/conversation/:id/memory", (req, res) => {
@@ -1356,16 +1347,7 @@ app.get("/api/conversation/:id/memory", (req, res) => {
   const memory = getCompressedMemory(conversationId);
   const brief = getConversationBrief(conversationId);
   const agents = mapStoredAgents(getConversationAgents(conversationId));
-  return res.json({
-    conversationId,
-    topic: conversation.topic,
-    title: conversation.title || "",
-    starred: Boolean(conversation.starred),
-    mode: sanitizeConversationMode(conversation.mode, "exploration"),
-    brief,
-    agents,
-    memory
-  });
+  return res.json(withConversationMeta(conversationId, conversation, { brief, agents, memory }));
 });
 
 app.get("/api/conversation/:id/insights", (req, res) => {
@@ -1385,14 +1367,7 @@ app.get("/api/conversation/:id/insights", (req, res) => {
     memory
   });
 
-  return res.json({
-    conversationId,
-    topic: conversation.topic,
-    title: conversation.title || "",
-    starred: Boolean(conversation.starred),
-    mode,
-    insights
-  });
+  return res.json(withConversationMeta(conversationId, conversation, { mode, insights }));
 });
 
 app.get("/api/conversations", (req, res) => {
