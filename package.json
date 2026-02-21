@@ -1,0 +1,24 @@
+{
+  "name": "openllmchat",
+  "version": "1.0.0",
+  "description": "Two AI agents conversing for 10 turns with shared context",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "keywords": [
+    "ai",
+    "chat",
+    "agents",
+    "openai"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^16.5.0",
+    "express": "^4.21.2",
+    "openai": "^5.13.1"
+  }
+}

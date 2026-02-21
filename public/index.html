@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>openllmchat</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="bg-orb orb-left" aria-hidden="true"></div>
+    <div class="bg-orb orb-right" aria-hidden="true"></div>
+
+    <main class="app-shell">
+      <header class="app-header">
+        <p class="eyebrow">openllmchat</p>
+        <h1>Two AI agents. One focused thread.</h1>
+        <p class="subtitle">
+          Run a 10-turn conversation where each agent keeps context and stays relevant to your topic.
+        </p>
+      </header>
+
+      <section class="control-panel">
+        <form id="conversation-form" class="conversation-form">
+          <label for="topic">Conversation topic</label>
+          <div class="input-row">
+            <input
+              id="topic"
+              name="topic"
+              type="text"
+              placeholder="Example: Designing a launch strategy for an AI tutoring app"
+              required
+            />
+            <button id="start-btn" type="submit">Start 10-turn dialog</button>
+          </div>
+        </form>
+        <div class="meta-row">
+          <span class="chip">10 turns fixed</span>
+          <span class="chip" id="engine-chip">Engine: waiting</span>
+        </div>
+      </section>
+
+      <section class="conversation-panel">
+        <div class="conversation-topbar">
+          <h2>Live transcript</h2>
+          <button id="clear-btn" class="secondary" type="button">Clear</button>
+        </div>
+        <div id="status" class="status">Enter a topic to begin.</div>
+        <ol id="transcript" class="transcript" aria-live="polite"></ol>
+      </section>
+    </main>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
