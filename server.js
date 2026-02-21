@@ -595,6 +595,78 @@ function mergeAgentConfig(existingAgents, incomingAgents) {
   });
 }
 
+function semanticLines(items, limit = 4) {
+  return (items || [])
+    .map((item) => String(item?.evidenceText || item?.canonicalText || "").trim())
+    .filter(Boolean)
+    .slice(0, limit);
+}
+
+function uniqueLines(lines, limit = 3) {
+  const seen = new Set();
+  const result = [];
+  for (const line of lines) {
+    const key = line.toLowerCase();
+    if (!line || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result.push(line);
+    if (result.length >= limit) {
+      break;
+    }
+  }
+  return result;
+}
+
+function buildInsightSnapshot({ topic, brief, mode, memory }) {
+  const grouped = memory?.groupedSemantic || {
+    decisions: [],
+    constraints: [],
+    definitions: [],
+    openQuestions: []
+  };
+
+  const decisions = semanticLines(grouped.decisions, 4);
+  const constraints = semanticLines(grouped.constraints, 4);
+  const definitions = semanticLines(grouped.definitions, 3);
+  const openQuestions = semanticLines(grouped.openQuestions, 4);
+
+  const modeStep =
+    mode === "debate"
+      ? "Surface the strongest counterargument and resolve the crux explicitly."
+      : mode === "synthesis"
+        ? "Lock one decision with tradeoffs and define the immediate execution step."
+        : "Run one small experiment and capture what evidence would change direction.";
+
+  const nextSteps = uniqueLines([
+    openQuestions[0] ? `Resolve open question: ${openQuestions[0]}` : "",
+    constraints[0] ? `Validate against constraint: ${constraints[0]}` : "",
+    brief?.doneCriteria ? `Drive toward done criteria: ${brief.doneCriteria}` : "",
+    decisions[0] ? `Pressure-test decision: ${decisions[0]}` : "",
+    modeStep
+  ]);
+
+  return {
+    topic,
+    mode,
+    objective: brief?.objective || "",
+    decisions,
+    constraints,
+    definitions,
+    openQuestions,
+    nextSteps,
+    stats: {
+      decisionCount: Number(memory?.stats?.decisionCount || 0),
+      openQuestionCount: Number(memory?.stats?.openQuestionCount || 0),
+      constraintCount: Number(memory?.stats?.constraintCount || 0),
+      definitionCount: Number(memory?.stats?.definitionCount || 0),
+      summaryCount: Number(memory?.stats?.summaryCount || 0),
+      tokenCount: Number(memory?.stats?.tokenCount || 0)
+    }
+  };
+}
+
 function parseJsonObject(text) {
   if (!text) {
     return null;
@@ -1248,6 +1320,37 @@ app.get("/api/conversation/:id/memory", (req, res) => {
     brief,
     agents,
     memory
+  });
+});
+
+app.get("/api/conversation/:id/insights", (req, res) => {
+  const conversationId = sanitizeConversationId(req.params.id);
+  if (!conversationId) {
+    return res.status(400).json({ error: "Conversation id is required." });
+  }
+
+  const conversation = getConversation(conversationId);
+  if (!conversation) {
+    return res.status(404).json({ error: "Conversation not found." });
+  }
+
+  const brief = getConversationBrief(conversationId);
+  const mode = sanitizeConversationMode(conversation.mode, "exploration");
+  const memory = getCompressedMemory(conversationId);
+  const insights = buildInsightSnapshot({
+    topic: conversation.topic,
+    brief,
+    mode,
+    memory
+  });
+
+  return res.json({
+    conversationId,
+    topic: conversation.topic,
+    title: conversation.title || "",
+    starred: Boolean(conversation.starred),
+    mode,
+    insights
   });
 });
 

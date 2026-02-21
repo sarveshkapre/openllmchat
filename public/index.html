@@ -166,6 +166,30 @@
               </article>
             </div>
           </section>
+          <section class="insight-panel">
+            <div class="memory-inspector-topbar">
+              <h3>Insight Snapshot</h3>
+              <div class="thread-actions">
+                <button id="refresh-insights-btn" class="secondary" type="button">Refresh insights</button>
+                <button id="copy-insights-btn" class="secondary" type="button">Copy insights</button>
+              </div>
+            </div>
+            <p id="insight-status" class="memory-inspector-status">Start or restore a thread to compute insights.</p>
+            <div class="memory-inspector-grid">
+              <article class="memory-card">
+                <h4>Decisions</h4>
+                <ul id="insight-decisions-list" class="memory-list"></ul>
+              </article>
+              <article class="memory-card">
+                <h4>Open questions</h4>
+                <ul id="insight-questions-list" class="memory-list"></ul>
+              </article>
+              <article class="memory-card">
+                <h4>Next steps</h4>
+                <ul id="insight-next-steps-list" class="memory-list"></ul>
+              </article>
+            </div>
+          </section>
         </section>
       </section>
     </main>

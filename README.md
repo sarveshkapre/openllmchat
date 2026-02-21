@@ -37,6 +37,10 @@ Modern web app where two AI agents discuss a user topic in 10-turn batches while
 - Conversation history sidebar with one-click thread restore
 - Live turn-by-turn streaming so agent replies appear in real time
 - Memory Inspector panel to audit high-value tokens, semantic memory items, and rolling summaries per thread
+- Insight Snapshot panel for actionable outputs:
+  - key decisions
+  - unresolved questions
+  - concrete next steps
 - Productivity workflow boosts:
   - Draft autosave/restore for topic, thread settings, brief, and agent studio inputs
   - Keyboard shortcuts: `Cmd/Ctrl + Enter` to run, `Cmd/Ctrl + S` to save all settings
@@ -183,6 +187,17 @@ Returns compressed memory details for a conversation:
 - structured semantic memory records
 - memory stats
 - active agent configuration
+
+### `GET /api/conversation/:id/insights`
+
+Returns an actionable insight snapshot derived from compressed memory:
+
+- decisions
+- constraints
+- definitions
+- open questions
+- next steps
+- insight stats
 
 ### `GET /api/conversations?limit=30`
 

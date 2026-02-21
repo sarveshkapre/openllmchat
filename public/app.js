@@ -11,6 +11,8 @@ const downloadBtn = document.querySelector("#download-btn");
 const refreshHistoryBtn = document.querySelector("#refresh-history-btn");
 const historySearchInput = document.querySelector("#history-search");
 const refreshMemoryBtn = document.querySelector("#refresh-memory-btn");
+const refreshInsightsBtn = document.querySelector("#refresh-insights-btn");
+const copyInsightsBtn = document.querySelector("#copy-insights-btn");
 const objectiveInput = document.querySelector("#objective");
 const constraintsInput = document.querySelector("#constraints");
 const doneCriteriaInput = document.querySelector("#done-criteria");
@@ -34,6 +36,10 @@ const memoryInspectorStatusEl = document.querySelector("#memory-inspector-status
 const memoryTokenListEl = document.querySelector("#memory-token-list");
 const memorySemanticListEl = document.querySelector("#memory-semantic-list");
 const memorySummaryListEl = document.querySelector("#memory-summary-list");
+const insightStatusEl = document.querySelector("#insight-status");
+const insightDecisionsListEl = document.querySelector("#insight-decisions-list");
+const insightQuestionsListEl = document.querySelector("#insight-questions-list");
+const insightNextStepsListEl = document.querySelector("#insight-next-steps-list");
 
 const CONVERSATION_ID_KEY = "openllmchat:conversationId";
 const TOPIC_KEY = "openllmchat:topic";
@@ -63,6 +69,7 @@ let displayedTranscript = [];
 let memoryState = null;
 let qualityState = null;
 let memoryInspectorState = null;
+let insightState = null;
 let cachedConversations = [];
 let draftSaveTimer = null;
 
@@ -213,6 +220,10 @@ function setMemoryInspectorStatus(text) {
   memoryInspectorStatusEl.textContent = text;
 }
 
+function setInsightStatus(text) {
+  insightStatusEl.textContent = text;
+}
+
 function createListEmpty(label) {
   const li = document.createElement("li");
   li.className = "memory-empty";
@@ -229,6 +240,17 @@ function clearMemoryInspector(message = "Start or restore a thread to inspect me
   memorySemanticListEl.appendChild(createListEmpty("No semantic items yet."));
   memorySummaryListEl.appendChild(createListEmpty("No summaries yet."));
   setMemoryInspectorStatus(message);
+}
+
+function clearInsightSnapshot(message = "Start or restore a thread to compute insights.") {
+  insightState = null;
+  insightDecisionsListEl.innerHTML = "";
+  insightQuestionsListEl.innerHTML = "";
+  insightNextStepsListEl.innerHTML = "";
+  insightDecisionsListEl.appendChild(createListEmpty("No decisions yet."));
+  insightQuestionsListEl.appendChild(createListEmpty("No open questions yet."));
+  insightNextStepsListEl.appendChild(createListEmpty("No next steps yet."));
+  setInsightStatus(message);
 }
 
 function renderTokenMemory(tokens) {
@@ -353,6 +375,92 @@ async function refreshMemoryInspector() {
     renderMemoryInspector(result);
   } catch (error) {
     clearMemoryInspector("Memory unavailable.");
+  }
+}
+
+function renderInsightList(container, lines, emptyText) {
+  container.innerHTML = "";
+  if (!lines.length) {
+    container.appendChild(createListEmpty(emptyText));
+    return;
+  }
+
+  for (const line of lines) {
+    const li = document.createElement("li");
+    li.className = "memory-item";
+
+    const title = document.createElement("span");
+    title.className = "memory-item-title";
+    title.textContent = line;
+    li.appendChild(title);
+
+    container.appendChild(li);
+  }
+}
+
+function renderInsightSnapshot(payload) {
+  const insights = payload?.insights || null;
+  insightState = insights;
+  if (!insights) {
+    clearInsightSnapshot("No insight snapshot available.");
+    return;
+  }
+
+  renderInsightList(insightDecisionsListEl, insights.decisions || [], "No decisions yet.");
+  renderInsightList(insightQuestionsListEl, insights.openQuestions || [], "No open questions yet.");
+  renderInsightList(insightNextStepsListEl, insights.nextSteps || [], "No next steps yet.");
+
+  const stats = insights.stats || {};
+  setInsightStatus(
+    `Mode ${insights.mode || DEFAULT_THREAD_MODE} • decisions ${stats.decisionCount || 0} • open questions ${
+      stats.openQuestionCount || 0
+    } • summaries ${stats.summaryCount || 0}`
+  );
+}
+
+function toInsightMarkdown() {
+  if (!insightState) {
+    return "";
+  }
+
+  const title = threadTitleInput.value.trim() || activeTopic || "Untitled thread";
+  const lines = [
+    `# Insight Snapshot`,
+    ``,
+    `- Title: ${title}`,
+    `- Topic: ${activeTopic || topicInput.value.trim() || "n/a"}`,
+    `- Conversation ID: ${activeConversationId || "n/a"}`,
+    `- Mode: ${insightState.mode || DEFAULT_THREAD_MODE}`,
+    ``,
+    `## Decisions`,
+    ...(insightState.decisions?.length ? insightState.decisions.map((line) => `- ${line}`) : ["- None yet"]),
+    ``,
+    `## Open Questions`,
+    ...(insightState.openQuestions?.length ? insightState.openQuestions.map((line) => `- ${line}`) : ["- None yet"]),
+    ``,
+    `## Next Steps`,
+    ...(insightState.nextSteps?.length ? insightState.nextSteps.map((line) => `- ${line}`) : ["- None yet"])
+  ];
+
+  return lines.join("\n");
+}
+
+async function refreshInsightSnapshot() {
+  if (!activeConversationId) {
+    clearInsightSnapshot();
+    return;
+  }
+
+  setInsightStatus("Refreshing insight snapshot...");
+  try {
+    const response = await fetch(`/api/conversation/${encodeURIComponent(activeConversationId)}/insights`);
+    const result = await response.json();
+    if (!response.ok) {
+      throw new Error(result.error || "Could not refresh insights");
+    }
+    renderInsightSnapshot(result);
+  } catch (error) {
+    clearInsightSnapshot("Insights unavailable.");
   }
 }
 
@@ -597,6 +705,7 @@ async function forkConversation(turn) {
 
     setStatus(`Fork created from turn ${result.forkFromTurn}. Now on new thread.`);
     await refreshMemoryInspector();
+    await refreshInsightSnapshot();
     await loadHistory();
   } catch (error) {
     setStatus(error.message || "Could not fork conversation.");
@@ -694,6 +803,7 @@ async function loadConversation(conversationId) {
   setMemoryChip(result.memory || null);
   setQualityChip(null);
   await refreshMemoryInspector();
+  await refreshInsightSnapshot();
 }
 
 function getVisibleConversations(conversations) {
@@ -847,6 +957,7 @@ async function restoreConversation() {
     setMemoryChip(null);
     setQualityChip(null);
     clearMemoryInspector();
+    clearInsightSnapshot();
     return;
   }
 
@@ -864,6 +975,7 @@ async function restoreConversation() {
     setMemoryChip(null);
     setQualityChip(null);
     clearMemoryInspector();
+    clearInsightSnapshot();
   }
 }
 
@@ -906,11 +1018,31 @@ clearBtn.addEventListener("click", async () => {
   setMemoryChip(null);
   setQualityChip(null);
   clearMemoryInspector();
+  clearInsightSnapshot();
   await loadHistory();
 });
 
 refreshMemoryBtn.addEventListener("click", async () => {
   await refreshMemoryInspector();
+});
+
+refreshInsightsBtn.addEventListener("click", async () => {
+  await refreshInsightSnapshot();
+});
+
+copyInsightsBtn.addEventListener("click", async () => {
+  const markdown = toInsightMarkdown();
+  if (!markdown) {
+    setStatus("No insights to copy yet.");
+    return;
+  }
+
+  try {
+    await navigator.clipboard.writeText(markdown);
+    setStatus("Insight snapshot copied.");
+  } catch (error) {
+    setStatus("Clipboard blocked. Copy failed.");
+  }
 });
 
 saveThreadBtn.addEventListener("click", async () => {
@@ -1106,6 +1238,7 @@ form.addEventListener("submit", async (event) => {
     setThreadMeta(null);
     setMemoryChip(null);
     clearMemoryInspector("Switched topic. Memory will rebuild for the new thread.");
+    clearInsightSnapshot("Switched topic. Insights will rebuild for the new thread.");
   }
 
   const conversationId = activeConversationId || undefined;
@@ -1282,6 +1415,7 @@ form.addEventListener("submit", async (event) => {
       `Added ${generatedTurns} turns. Total turns: ${totalTurns}. Topic: ${finalTopic}.${reasonSuffix}${moderatorSuffix}${qualitySuffix}`
     );
     await refreshMemoryInspector();
+    await refreshInsightSnapshot();
     await loadHistory();
   } catch (error) {
     if (String(error.message || "").toLowerCase().includes("not found")) {
@@ -1289,6 +1423,7 @@ form.addEventListener("submit", async (event) => {
       setMemoryChip(null);
       setQualityChip(null);
       clearMemoryInspector();
+      clearInsightSnapshot();
       await loadHistory();
     }
 
@@ -1304,6 +1439,7 @@ form.addEventListener("submit", async (event) => {
 setThreadMeta(null);
 setAgentFields(null);
 clearMemoryInspector();
+clearInsightSnapshot();
 restoreDraftState();
 
 (async () => {
