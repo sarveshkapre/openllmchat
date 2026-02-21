@@ -37,7 +37,8 @@ function setMemoryChip(memory) {
 
   const tokens = Number(memoryState.tokenCount || 0);
   const summaries = Number(memoryState.summaryCount || 0);
-  memoryChipEl.textContent = `Memory: ${tokens} tokens • ${summaries} summaries`;
+  const semantic = Number(memoryState.semanticCount || 0);
+  memoryChipEl.textContent = `Memory: ${tokens} tokens • ${summaries} summaries • ${semantic} semantic`;
 }
 
 function setConversationState(conversationId, topic) {
@@ -127,6 +128,7 @@ function toMarkdownTranscript() {
     `- Total turns: ${displayedTranscript.length}`,
     `- Memory tokens: ${memoryState?.tokenCount || 0}`,
     `- Memory summaries: ${memoryState?.summaryCount || 0}`,
+    `- Semantic memory items: ${memoryState?.semanticCount || 0}`,
     ``,
     `## Turns`,
     ``
@@ -384,6 +386,8 @@ form.addEventListener("submit", async (event) => {
     let generatedTurns = 0;
     let totalTurns = 0;
     let finalTopic = topic;
+    let stopReason = "max_turns";
+    let moderatorHint = "";
 
     const handleChunk = (chunk) => {
       if (chunk.type === "meta") {
@@ -403,9 +407,18 @@ form.addEventListener("submit", async (event) => {
         return;
       }
 
+      if (chunk.type === "moderator") {
+        moderatorHint = chunk.moderation?.directive || "";
+        if (moderatorHint) {
+          setStatus(`Moderator: ${moderatorHint}`);
+        }
+        return;
+      }
+
       if (chunk.type === "done") {
         totalTurns = chunk.totalTurns ?? totalTurns;
         finalTopic = chunk.topic || finalTopic;
+        stopReason = chunk.stopReason || stopReason;
         setMemoryChip(chunk.memory || null);
         return;
       }
@@ -438,7 +451,13 @@ form.addEventListener("submit", async (event) => {
       handleChunk(JSON.parse(tail));
     }
 
-    setStatus(`Added ${generatedTurns} turns. Total turns: ${totalTurns}. Topic: ${finalTopic}`);
+    const reasonSuffix =
+      stopReason && stopReason !== "max_turns" ? ` Stop reason: ${stopReason}.` : "";
+    const moderatorSuffix = moderatorHint ? ` Last moderator hint: ${moderatorHint}` : "";
+
+    setStatus(
+      `Added ${generatedTurns} turns. Total turns: ${totalTurns}. Topic: ${finalTopic}.${reasonSuffix}${moderatorSuffix}`
+    );
     await loadHistory();
   } catch (error) {
     if (String(error.message || "").toLowerCase().includes("not found")) {

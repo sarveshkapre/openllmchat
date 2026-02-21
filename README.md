@@ -5,12 +5,17 @@ Modern web app where two AI agents discuss a user topic in 10-turn batches while
 ## Features
 
 - Two agent personas that alternate each turn
-- Fixed 10-turn generation per run
+- Fixed 10-turn generation per run (with early-stop guardrails)
 - Persistent conversation state using SQLite
 - Compressed context memory for long threads:
   - Stores only high-value tokens (drops filler words, articles, punctuation-only noise)
   - Maintains weighted token memory with pruning to top tokens
   - Creates rolling summary snapshots after configurable turn windows
+  - Extracts structured semantic memory (decisions, constraints, definitions, open questions)
+- Coordinator guardrails:
+  - Charter-driven turn generation
+  - Moderator pass every N turns with steering directives
+  - Repetition guard and optional DONE-token stopping
 - Conversation history sidebar with one-click thread restore
 - Live turn-by-turn streaming so agent replies appear in real time
 - One-click transcript export (copy markdown or download file)
@@ -38,6 +43,11 @@ Open `http://localhost:3000`.
 - `MEMORY_SUMMARY_WINDOW_TURNS`: turns per summary chunk (default `40`)
 - `MEMORY_MIN_TURNS_FOR_SUMMARY`: minimum total turns before summary generation starts (default `40`)
 - `MEMORY_SUMMARY_LIMIT`: number of latest summaries injected into prompts (default `6`)
+- `MEMORY_SEMANTIC_KEEP_LIMIT`: max semantic records stored per conversation (default `240`)
+- `MEMORY_PROMPT_SEMANTIC_LIMIT`: semantic records injected into prompt context (default `24`)
+- `MODERATOR_INTERVAL`: run moderator every N total turns (default `6`)
+- `MAX_GENERATION_MS`: hard per-request generation time budget (default `30000`)
+- `MAX_REPETITION_STREAK`: allowed near-duplicate turn streak before stop (default `2`)
 - `PORT`: server port (default `3000`)
 
 ## API
@@ -56,15 +66,16 @@ Request body:
 }
 ```
 
-Response includes the new turns generated for this run, total turns, and memory stats.
+Response includes generated turns, total turns, memory stats, and stop reason.
 
 ### `POST /api/conversation/stream`
 
 Same behavior as `POST /api/conversation`, but returns newline-delimited JSON chunks for live UI updates:
 
-- `meta`: conversation info, engine, current memory stats
-- `turn`: one generated turn
-- `done`: final summary with updated memory stats
+- `meta`: conversation info, engine, memory stats, charter, guardrails
+- `turn`: one generated turn plus quality stats
+- `moderator`: moderator assessment/directive
+- `done`: final summary with stop reason and updated memory stats
 
 ### `GET /api/conversation/:id`
 
@@ -76,6 +87,7 @@ Returns compressed memory details for a conversation:
 
 - weighted high-value tokens
 - rolling summaries
+- structured semantic memory records
 - memory stats
 
 ### `GET /api/conversations?limit=30`

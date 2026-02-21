@@ -51,11 +51,31 @@ db.exec(`
     UNIQUE (conversation_id, start_turn, end_turn)
   );
 
+  CREATE TABLE IF NOT EXISTS semantic_memory (
+    conversation_id TEXT NOT NULL,
+    item_type TEXT NOT NULL,
+    canonical_text TEXT NOT NULL,
+    evidence_text TEXT NOT NULL,
+    weight REAL NOT NULL DEFAULT 0,
+    confidence REAL NOT NULL DEFAULT 0,
+    occurrences INTEGER NOT NULL DEFAULT 0,
+    first_turn INTEGER NOT NULL,
+    last_turn INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (conversation_id, item_type, canonical_text),
+    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+  );
+
   CREATE INDEX IF NOT EXISTS idx_memory_tokens_conversation_weight
     ON memory_tokens(conversation_id, weight DESC, last_turn DESC);
 
   CREATE INDEX IF NOT EXISTS idx_conversation_summaries_range
     ON conversation_summaries(conversation_id, end_turn DESC);
+
+  CREATE INDEX IF NOT EXISTS idx_semantic_memory_weight
+    ON semantic_memory(conversation_id, item_type, weight DESC, last_turn DESC);
 `);
 
 const getConversationStmt = db.prepare(`
@@ -145,11 +165,82 @@ const listMemoryTokensStmt = db.prepare(`
   LIMIT ?
 `);
 
+const upsertSemanticMemoryStmt = db.prepare(`
+  INSERT INTO semantic_memory (
+    conversation_id,
+    item_type,
+    canonical_text,
+    evidence_text,
+    weight,
+    confidence,
+    occurrences,
+    first_turn,
+    last_turn,
+    status
+  )
+  VALUES (
+    @conversationId,
+    @itemType,
+    @canonicalText,
+    @evidenceText,
+    @weight,
+    @confidence,
+    @occurrences,
+    @firstTurn,
+    @lastTurn,
+    @status
+  )
+  ON CONFLICT(conversation_id, item_type, canonical_text) DO UPDATE SET
+    evidence_text = excluded.evidence_text,
+    weight = semantic_memory.weight + excluded.weight,
+    confidence = MAX(semantic_memory.confidence, excluded.confidence),
+    occurrences = semantic_memory.occurrences + excluded.occurrences,
+    first_turn = MIN(semantic_memory.first_turn, excluded.first_turn),
+    last_turn = MAX(semantic_memory.last_turn, excluded.last_turn),
+    status = excluded.status,
+    updated_at = CURRENT_TIMESTAMP
+`);
+
+const pruneSemanticMemoryStmt = db.prepare(`
+  DELETE FROM semantic_memory
+  WHERE conversation_id = @conversationId
+    AND (item_type || ':' || canonical_text) IN (
+      SELECT item_type || ':' || canonical_text
+      FROM semantic_memory
+      WHERE conversation_id = @conversationId
+      ORDER BY weight DESC, last_turn DESC, canonical_text ASC
+      LIMIT -1 OFFSET @keepLimit
+    )
+`);
+
+const listSemanticMemoryStmt = db.prepare(`
+  SELECT
+    item_type AS itemType,
+    canonical_text AS canonicalText,
+    evidence_text AS evidenceText,
+    weight,
+    confidence,
+    occurrences,
+    first_turn AS firstTurn,
+    last_turn AS lastTurn,
+    status,
+    updated_at AS updatedAt
+  FROM semantic_memory
+  WHERE conversation_id = ?
+  ORDER BY weight DESC, last_turn DESC, canonical_text ASC
+  LIMIT ?
+`);
+
 const getMemoryStatsStmt = db.prepare(`
   SELECT
     COALESCE((SELECT COUNT(*) FROM memory_tokens WHERE conversation_id = @conversationId), 0) AS tokenCount,
     COALESCE((SELECT COUNT(*) FROM conversation_summaries WHERE conversation_id = @conversationId), 0) AS summaryCount,
-    COALESCE((SELECT MAX(end_turn) FROM conversation_summaries WHERE conversation_id = @conversationId), 0) AS lastSummaryTurn
+    COALESCE((SELECT MAX(end_turn) FROM conversation_summaries WHERE conversation_id = @conversationId), 0) AS lastSummaryTurn,
+    COALESCE((SELECT COUNT(*) FROM semantic_memory WHERE conversation_id = @conversationId), 0) AS semanticCount,
+    COALESCE((SELECT COUNT(*) FROM semantic_memory WHERE conversation_id = @conversationId AND item_type = 'decision'), 0) AS decisionCount,
+    COALESCE((SELECT COUNT(*) FROM semantic_memory WHERE conversation_id = @conversationId AND item_type = 'open_question'), 0) AS openQuestionCount,
+    COALESCE((SELECT COUNT(*) FROM semantic_memory WHERE conversation_id = @conversationId AND item_type = 'constraint'), 0) AS constraintCount,
+    COALESCE((SELECT COUNT(*) FROM semantic_memory WHERE conversation_id = @conversationId AND item_type = 'definition'), 0) AS definitionCount
 `);
 
 const getLastSummaryTurnStmt = db.prepare(`
@@ -202,6 +293,23 @@ const upsertMemoryTokensTx = db.transaction((conversationId, entries) => {
   }
 });
 
+const upsertSemanticMemoryTx = db.transaction((conversationId, entries) => {
+  for (const entry of entries) {
+    upsertSemanticMemoryStmt.run({
+      conversationId,
+      itemType: entry.itemType,
+      canonicalText: entry.canonicalText,
+      evidenceText: entry.evidenceText,
+      weight: entry.weight,
+      confidence: entry.confidence,
+      occurrences: entry.occurrences,
+      firstTurn: entry.firstTurn,
+      lastTurn: entry.lastTurn,
+      status: entry.status
+    });
+  }
+});
+
 function getConversation(conversationId) {
   return getConversationStmt.get(conversationId) || null;
 }
@@ -250,6 +358,24 @@ function getTopMemoryTokens(conversationId, limit = 50) {
   return listMemoryTokensStmt.all(conversationId, safeLimit);
 }
 
+function upsertSemanticItems(conversationId, entries) {
+  if (!entries.length) {
+    return;
+  }
+
+  upsertSemanticMemoryTx(conversationId, entries);
+}
+
+function pruneSemanticItems(conversationId, keepLimit = 240) {
+  const safeKeepLimit = Math.max(40, Math.min(800, Number(keepLimit) || 240));
+  pruneSemanticMemoryStmt.run({ conversationId, keepLimit: safeKeepLimit });
+}
+
+function getTopSemanticItems(conversationId, limit = 24) {
+  const safeLimit = Math.max(1, Math.min(120, Number(limit) || 24));
+  return listSemanticMemoryStmt.all(conversationId, safeLimit);
+}
+
 function getMemoryStats(conversationId) {
   return getMemoryStatsStmt.get({ conversationId });
 }
@@ -288,9 +414,12 @@ export {
   getMessagesInRange,
   getRecentSummaries,
   getTopMemoryTokens,
+  getTopSemanticItems,
   insertMessages,
   insertSummary,
   listConversations,
   pruneMemoryTokens,
-  upsertMemoryTokens
+  pruneSemanticItems,
+  upsertMemoryTokens,
+  upsertSemanticItems
 };
