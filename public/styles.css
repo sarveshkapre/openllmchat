@@ -588,6 +588,40 @@ h2 {
   font-size: 0.75rem;
 }
 
+.lab-item {
+  border: 1px solid rgba(125, 186, 214, 0.2);
+  border-radius: 10px;
+  background: rgba(7, 18, 28, 0.85);
+  padding: 0.44rem 0.48rem;
+  display: grid;
+  gap: 0.3rem;
+}
+
+.lab-item-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.lab-pill {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid rgba(125, 186, 214, 0.25);
+  border-radius: 999px;
+  padding: 0.1rem 0.4rem;
+  color: #b9d5e5;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.62rem;
+}
+
+.lab-open-btn {
+  padding: 0.2rem 0.42rem;
+  border-radius: 8px;
+  font-size: 0.63rem;
+  line-height: 1.1;
+}
+
 @keyframes reveal-up {
   from {
     opacity: 0;

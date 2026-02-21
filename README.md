@@ -41,6 +41,10 @@ Modern web app where two AI agents discuss a user topic in 10-turn batches while
   - key decisions
   - unresolved questions
   - concrete next steps
+- Discovery Lab one-click experiment runner:
+  - runs `exploration`, `debate`, and `synthesis` threads in one request
+  - returns side-by-side quality + insight summaries
+  - allows fast thread switching into each lab run
 - Productivity workflow boosts:
   - Draft autosave/restore for topic, thread settings, brief, and agent studio inputs
   - Keyboard shortcuts: `Cmd/Ctrl + Enter` to run, `Cmd/Ctrl + S` to save all settings
@@ -85,6 +89,7 @@ Open `http://localhost:3000`.
 - `RATE_LIMIT_WINDOW_MS`: API rate limit window in milliseconds (default `60000`)
 - `RATE_LIMIT_MAX_REQUESTS`: max API requests per client IP per window (default `180`)
 - `GENERATION_LIMIT_MAX_REQUESTS`: max conversation generation POST requests per IP per window (default `36`)
+- `LAB_DEFAULT_TURNS`: turns per mode in discovery lab runs (default `6`)
 - `PORT`: server port (default `3000`)
 
 ## API
@@ -134,6 +139,22 @@ Same behavior as `POST /api/conversation`, but returns newline-delimited JSON ch
 - `turn`: one generated turn plus quality stats
 - `moderator`: moderator assessment/directive
 - `done`: final summary with stop reason, title/starred/mode, brief, agents, quality summary, and updated memory stats
+
+### `POST /api/conversation/lab`
+
+Runs a multi-mode experiment (`exploration`, `debate`, `synthesis`) and returns one generated thread per mode.
+
+Request supports either:
+
+- `conversationId` (forks current thread context into all modes), or
+- `topic` for a new lab run.
+
+Also supports optional brief/agent/thread meta fields.
+
+Response includes:
+
+- `turnsPerMode`
+- `runs[]` where each run includes `conversationId`, `mode`, quality summary, memory stats, and insight snapshot.
 
 ### `GET /api/conversation/:id`
 

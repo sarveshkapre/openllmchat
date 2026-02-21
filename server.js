@@ -82,6 +82,7 @@ const DISCUSSION_CHARTER = [
 ];
 
 const DISCOVERY_MODE_SET = new Set(["exploration", "debate", "synthesis"]);
+const DISCOVERY_LAB_MODES = ["exploration", "debate", "synthesis"];
 const DISCOVERY_MODE_HINTS = {
   exploration: "Mode: exploration. Generate novel hypotheses and testable experiments.",
   debate: "Mode: debate. Surface strongest pro/con arguments and identify the core crux.",
@@ -114,6 +115,7 @@ const QUALITY_MIN_TOPIC_COVERAGE = readFloatEnv("QUALITY_MIN_TOPIC_COVERAGE", 0.
 const RATE_LIMIT_WINDOW_MS = readIntEnv("RATE_LIMIT_WINDOW_MS", 60000, 1000, 3600000);
 const RATE_LIMIT_MAX_REQUESTS = readIntEnv("RATE_LIMIT_MAX_REQUESTS", 180, 20, 5000);
 const GENERATION_LIMIT_MAX_REQUESTS = readIntEnv("GENERATION_LIMIT_MAX_REQUESTS", 36, 2, 500);
+const LAB_DEFAULT_TURNS = readIntEnv("LAB_DEFAULT_TURNS", 6, 2, 10);
 
 const apiRateState = new Map();
 const generationRateState = new Map();
@@ -176,7 +178,7 @@ app.use("/api", (req, res, next) => {
     return next();
   }
 
-  if (!["/conversation", "/conversation/stream"].includes(req.path)) {
+  if (!["/conversation", "/conversation/stream", "/conversation/lab"].includes(req.path)) {
     return next();
   }
 
@@ -388,6 +390,11 @@ async function generateTurn({ topic, speaker, transcript, memory, moderatorDirec
 function parseTurns(rawTurns) {
   const requestedTurns = Number(rawTurns ?? 10);
   return Math.min(10, Math.max(2, Number.isFinite(requestedTurns) ? requestedTurns : 10));
+}
+
+function parseLabTurns(rawTurns) {
+  const requestedTurns = Number(rawTurns ?? LAB_DEFAULT_TURNS);
+  return Math.min(10, Math.max(2, Number.isFinite(requestedTurns) ? requestedTurns : LAB_DEFAULT_TURNS));
 }
 
 function sanitizeBriefField(value, maxLen = 800) {
@@ -894,6 +901,21 @@ async function finalizeMemory(conversationId, topic, newEntries, totalTurns) {
   }
 }
 
+function cloneTranscriptEntries(entries) {
+  return (entries || []).map((entry) => ({
+    turn: entry.turn,
+    speaker: entry.speaker,
+    speakerId: entry.speakerId,
+    text: entry.text
+  }));
+}
+
+function modeTitle(baseTitle, mode) {
+  const prefix = sanitizeConversationTitle(baseTitle, "Conversation");
+  const label = mode.charAt(0).toUpperCase() + mode.slice(1);
+  return sanitizeConversationTitle(`${prefix} (${label})`, prefix);
+}
+
 async function runConversationBatch({
   conversationId,
   topic,
@@ -1359,6 +1381,142 @@ app.get("/api/conversations", (req, res) => {
   const limit = Math.min(100, Math.max(1, Number.isFinite(requestedLimit) ? requestedLimit : 20));
   const conversations = listConversations(limit);
   return res.json({ conversations });
+});
+
+app.post("/api/conversation/lab", async (req, res) => {
+  try {
+    const baseConversationId = sanitizeConversationId(req.body?.conversationId);
+    const requestedTopic = sanitizeTopic(req.body?.topic);
+    const requestedBrief = parseBriefFromBody(req.body);
+    const requestedAgents = parseAgentConfigFromBody(req.body);
+    const requestedMeta = parseConversationMetaFromBody(req.body);
+    const turns = parseLabTurns(req.body?.turns);
+    const shouldUpdateBrief = hasBriefPayload(req.body);
+    const shouldUpdateAgents = hasAgentPayload(req.body);
+
+    let sourceConversation = null;
+    let sourceTranscript = [];
+    let topic = requestedTopic;
+    let brief = shouldUpdateBrief
+      ? requestedBrief
+      : {
+          objective: "",
+          constraintsText: "",
+          doneCriteria: ""
+        };
+    let agents = shouldUpdateAgents
+      ? mergeAgentConfig(mapStoredAgents([]), requestedAgents)
+      : mapStoredAgents([]);
+    let baseTitle = sanitizeConversationTitle(requestedMeta.title, topic);
+    let parentConversationId = null;
+    let forkFromTurn = null;
+
+    if (baseConversationId) {
+      sourceConversation = getConversation(baseConversationId);
+      if (!sourceConversation) {
+        return res.status(404).json({ error: "Conversation not found." });
+      }
+
+      topic = sourceConversation.topic;
+      sourceTranscript = getMessages(baseConversationId);
+      brief = getConversationBrief(baseConversationId);
+      const storedAgents = getConversationAgents(baseConversationId);
+      agents = storedAgents.length ? mapStoredAgents(storedAgents) : mapStoredAgents([]);
+      if (shouldUpdateBrief) {
+        brief = mergeBriefPatch(brief, req.body || {}, requestedBrief);
+      }
+      if (shouldUpdateAgents) {
+        agents = mergeAgentConfig(agents, requestedAgents);
+      }
+
+      baseTitle = requestedMeta.title
+        ? sanitizeConversationTitle(requestedMeta.title, sourceConversation.topic)
+        : sanitizeConversationTitle(sourceConversation.title, sourceConversation.topic);
+      parentConversationId = sourceConversation.id;
+      forkFromTurn = sourceTranscript.length;
+    }
+
+    if (!topic) {
+      return res.status(400).json({ error: "Topic is required." });
+    }
+
+    const runs = [];
+    for (const mode of DISCOVERY_LAB_MODES) {
+      const conversationId = randomUUID();
+      createConversation(conversationId, topic, {
+        parentConversationId,
+        forkFromTurn: Number.isFinite(forkFromTurn) ? forkFromTurn : null
+      });
+      updateConversationMeta(conversationId, {
+        title: modeTitle(baseTitle || topic, mode),
+        starred: false,
+        mode
+      });
+      upsertConversationBrief(conversationId, brief);
+      upsertConversationAgents(conversationId, agents);
+
+      const seedTranscript = cloneTranscriptEntries(sourceTranscript);
+      if (seedTranscript.length) {
+        insertMessages(conversationId, seedTranscript);
+      }
+
+      await bootstrapMemoryIfNeeded({
+        conversationId,
+        topic,
+        transcript: seedTranscript,
+        client,
+        model
+      });
+
+      const memoryBefore = getCompressedMemory(conversationId);
+      const transcript = getMessages(conversationId);
+      const batch = await runConversationBatch({
+        conversationId,
+        topic,
+        mode,
+        brief,
+        agents,
+        transcript,
+        turns,
+        memory: memoryBefore
+      });
+
+      const conversation = getConversation(conversationId);
+      const memory = getCompressedMemory(conversationId);
+      const insights = buildInsightSnapshot({
+        topic,
+        brief,
+        mode,
+        memory
+      });
+
+      runs.push({
+        conversationId,
+        topic,
+        title: conversation?.title || modeTitle(baseTitle || topic, mode),
+        starred: Boolean(conversation?.starred),
+        mode,
+        parentConversationId: conversation?.parentConversationId || null,
+        forkFromTurn: Number.isFinite(conversation?.forkFromTurn) ? conversation.forkFromTurn : null,
+        addedTurns: batch.newEntries.length,
+        totalTurns: batch.totalTurns,
+        stopReason: batch.stopReason,
+        quality: batch.qualitySummary,
+        memory: batch.memoryStats,
+        insights
+      });
+    }
+
+    return res.json({
+      topic,
+      turnsPerMode: turns,
+      baseConversationId: sourceConversation?.id || null,
+      runs
+    });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ error: "Failed to run discovery lab." });
+  }
 });
 
 app.post("/api/conversation/stream", async (req, res) => {

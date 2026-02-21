@@ -1,6 +1,7 @@
 const form = document.querySelector("#conversation-form");
 const topicInput = document.querySelector("#topic");
 const startBtn = document.querySelector("#start-btn");
+const labBtn = document.querySelector("#lab-btn");
 const clearBtn = document.querySelector("#clear-btn");
 const saveThreadBtn = document.querySelector("#save-thread-btn");
 const toggleStarBtn = document.querySelector("#toggle-star-btn");
@@ -40,6 +41,8 @@ const insightStatusEl = document.querySelector("#insight-status");
 const insightDecisionsListEl = document.querySelector("#insight-decisions-list");
 const insightQuestionsListEl = document.querySelector("#insight-questions-list");
 const insightNextStepsListEl = document.querySelector("#insight-next-steps-list");
+const labStatusEl = document.querySelector("#lab-status");
+const labResultsListEl = document.querySelector("#lab-results-list");
 
 const CONVERSATION_ID_KEY = "openllmchat:conversationId";
 const TOPIC_KEY = "openllmchat:topic";
@@ -70,6 +73,7 @@ let memoryState = null;
 let qualityState = null;
 let memoryInspectorState = null;
 let insightState = null;
+let labResultsState = [];
 let cachedConversations = [];
 let draftSaveTimer = null;
 
@@ -224,6 +228,10 @@ function setInsightStatus(text) {
   insightStatusEl.textContent = text;
 }
 
+function setLabStatus(text) {
+  labStatusEl.textContent = text;
+}
+
 function createListEmpty(label) {
   const li = document.createElement("li");
   li.className = "memory-empty";
@@ -251,6 +259,13 @@ function clearInsightSnapshot(message = "Start or restore a thread to compute in
   insightQuestionsListEl.appendChild(createListEmpty("No open questions yet."));
   insightNextStepsListEl.appendChild(createListEmpty("No next steps yet."));
   setInsightStatus(message);
+}
+
+function clearLabResults(message = "Run lab to compare exploration, debate, and synthesis threads.") {
+  labResultsState = [];
+  labResultsListEl.innerHTML = "";
+  labResultsListEl.appendChild(createListEmpty("No lab runs yet."));
+  setLabStatus(message);
 }
 
 function renderTokenMemory(tokens) {
@@ -461,6 +476,119 @@ async function refreshInsightSnapshot() {
     renderInsightSnapshot(result);
   } catch (error) {
     clearInsightSnapshot("Insights unavailable.");
+  }
+}
+
+function renderLabResults(runs) {
+  labResultsState = Array.isArray(runs) ? runs : [];
+  labResultsListEl.innerHTML = "";
+
+  if (!labResultsState.length) {
+    labResultsListEl.appendChild(createListEmpty("No lab runs yet."));
+    return;
+  }
+
+  for (const run of labResultsState) {
+    const li = document.createElement("li");
+    li.className = "lab-item";
+
+    const top = document.createElement("div");
+    top.className = "lab-item-top";
+
+    const mode = document.createElement("span");
+    mode.className = "lab-pill";
+    mode.textContent = run.mode || DEFAULT_THREAD_MODE;
+
+    const openBtn = document.createElement("button");
+    openBtn.type = "button";
+    openBtn.className = "secondary lab-open-btn";
+    openBtn.textContent = "Open thread";
+    openBtn.addEventListener("click", async () => {
+      try {
+        setStatus("Loading lab thread...");
+        await loadConversation(run.conversationId);
+        await loadHistory();
+      } catch (error) {
+        setStatus(error.message || "Could not load lab thread.");
+      }
+    });
+
+    top.appendChild(mode);
+    top.appendChild(openBtn);
+
+    const summary = document.createElement("span");
+    summary.className = "memory-item-meta";
+    const avgScore = Number(run?.quality?.avgScore || 0);
+    const openQuestions = Number(run?.insights?.stats?.openQuestionCount || 0);
+    const decisions = Number(run?.insights?.stats?.decisionCount || 0);
+    summary.textContent = `quality ${(avgScore * 100).toFixed(0)} • decisions ${decisions} • open ${openQuestions} • turns ${
+      run.totalTurns || 0
+    }`;
+
+    const nextStep = document.createElement("span");
+    nextStep.className = "memory-item-title";
+    nextStep.textContent = run?.insights?.nextSteps?.[0] || "No next step available.";
+
+    li.appendChild(top);
+    li.appendChild(summary);
+    li.appendChild(nextStep);
+    labResultsListEl.appendChild(li);
+  }
+}
+
+async function runDiscoveryLab() {
+  const topic = topicInput.value.trim();
+  if (!topic && !activeConversationId) {
+    setStatus("Enter a topic or load a thread before running Discovery Lab.");
+    return;
+  }
+
+  const payload = {
+    topic,
+    conversationId: activeConversationId || undefined,
+    turns: 6,
+    ...getBriefPayload(),
+    ...getThreadMetaPayload(),
+    agents: getAgentPayload()
+  };
+
+  labBtn.disabled = true;
+  startBtn.disabled = true;
+  setLabStatus("Running discovery lab across all modes...");
+  setStatus("Discovery Lab running...");
+
+  try {
+    const response = await fetch("/api/conversation/lab", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload)
+    });
+    const result = await response.json();
+    if (!response.ok) {
+      throw new Error(result.error || "Could not run discovery lab");
+    }
+
+    renderLabResults(result.runs || []);
+    const runs = result.runs || [];
+    const best = runs
+      .slice()
+      .sort((a, b) => Number(b?.quality?.avgScore || 0) - Number(a?.quality?.avgScore || 0))[0];
+    if (best) {
+      setLabStatus(`Completed ${runs.length} runs. Best quality mode: ${best.mode}.`);
+      setStatus(`Discovery Lab complete. Best mode this run: ${best.mode}.`);
+    } else {
+      setLabStatus("Discovery Lab completed.");
+    }
+
+    await loadHistory();
+  } catch (error) {
+    setLabStatus("Discovery Lab failed.");
+    setStatus(error.message || "Could not run discovery lab.");
+  } finally {
+    labBtn.disabled = false;
+    startBtn.disabled = false;
   }
 }
 
@@ -958,6 +1086,7 @@ async function restoreConversation() {
     setQualityChip(null);
     clearMemoryInspector();
     clearInsightSnapshot();
+    clearLabResults();
     return;
   }
 
@@ -976,6 +1105,7 @@ async function restoreConversation() {
     setQualityChip(null);
     clearMemoryInspector();
     clearInsightSnapshot();
+    clearLabResults();
   }
 }
 
@@ -1019,6 +1149,7 @@ clearBtn.addEventListener("click", async () => {
   setQualityChip(null);
   clearMemoryInspector();
   clearInsightSnapshot();
+  clearLabResults();
   await loadHistory();
 });
 
@@ -1028,6 +1159,10 @@ refreshMemoryBtn.addEventListener("click", async () => {
 
 refreshInsightsBtn.addEventListener("click", async () => {
   await refreshInsightSnapshot();
+});
+
+labBtn.addEventListener("click", async () => {
+  await runDiscoveryLab();
 });
 
 copyInsightsBtn.addEventListener("click", async () => {
@@ -1239,6 +1374,7 @@ form.addEventListener("submit", async (event) => {
     setMemoryChip(null);
     clearMemoryInspector("Switched topic. Memory will rebuild for the new thread.");
     clearInsightSnapshot("Switched topic. Insights will rebuild for the new thread.");
+    clearLabResults("Switched topic. Run Discovery Lab again for this topic.");
   }
 
   const conversationId = activeConversationId || undefined;
@@ -1256,6 +1392,7 @@ form.addEventListener("submit", async (event) => {
   }
 
   startBtn.disabled = true;
+  labBtn.disabled = true;
   setStatus(
     conversationId
       ? "Agents are continuing this thread for 10 more turns..."
@@ -1424,6 +1561,7 @@ form.addEventListener("submit", async (event) => {
       setQualityChip(null);
       clearMemoryInspector();
       clearInsightSnapshot();
+      clearLabResults();
       await loadHistory();
     }
 
@@ -1433,6 +1571,7 @@ form.addEventListener("submit", async (event) => {
     setStatus(error.message || "Could not generate conversation.");
   } finally {
     startBtn.disabled = false;
+    labBtn.disabled = false;
   }
 });
 
@@ -1440,6 +1579,7 @@ setThreadMeta(null);
 setAgentFields(null);
 clearMemoryInspector();
 clearInsightSnapshot();
+clearLabResults();
 restoreDraftState();
 
 (async () => {
