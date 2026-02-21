@@ -8,6 +8,7 @@ const refreshHistoryBtn = document.querySelector("#refresh-history-btn");
 const transcriptEl = document.querySelector("#transcript");
 const statusEl = document.querySelector("#status");
 const engineChipEl = document.querySelector("#engine-chip");
+const memoryChipEl = document.querySelector("#memory-chip");
 const historyListEl = document.querySelector("#history-list");
 const historyStatusEl = document.querySelector("#history-status");
 
@@ -17,6 +18,7 @@ const TOPIC_KEY = "openllmchat:topic";
 let activeConversationId = localStorage.getItem(CONVERSATION_ID_KEY) || "";
 let activeTopic = localStorage.getItem(TOPIC_KEY) || "";
 let displayedTranscript = [];
+let memoryState = null;
 
 function setStatus(text) {
   statusEl.textContent = text;
@@ -24,6 +26,18 @@ function setStatus(text) {
 
 function setHistoryStatus(text) {
   historyStatusEl.textContent = text;
+}
+
+function setMemoryChip(memory) {
+  memoryState = memory || null;
+  if (!memoryState) {
+    memoryChipEl.textContent = "Memory: waiting";
+    return;
+  }
+
+  const tokens = Number(memoryState.tokenCount || 0);
+  const summaries = Number(memoryState.summaryCount || 0);
+  memoryChipEl.textContent = `Memory: ${tokens} tokens • ${summaries} summaries`;
 }
 
 function setConversationState(conversationId, topic) {
@@ -111,6 +125,8 @@ function toMarkdownTranscript() {
     `- Topic: ${titleTopic}`,
     `- Conversation ID: ${activeConversationId || "n/a"}`,
     `- Total turns: ${displayedTranscript.length}`,
+    `- Memory tokens: ${memoryState?.tokenCount || 0}`,
+    `- Memory summaries: ${memoryState?.summaryCount || 0}`,
     ``,
     `## Turns`,
     ``
@@ -162,6 +178,7 @@ async function loadConversation(conversationId) {
 
   setStatus(`Restored ${result.totalTurns} turns on topic: ${result.topic}`);
   engineChipEl.textContent = "Engine: restored thread";
+  setMemoryChip(result.memory || null);
 }
 
 function renderHistory(conversations) {
@@ -240,6 +257,7 @@ async function loadHistory() {
 async function restoreConversation() {
   if (!activeConversationId) {
     clearTranscript("Enter a topic to begin.");
+    setMemoryChip(null);
     return;
   }
 
@@ -251,6 +269,7 @@ async function restoreConversation() {
     clearConversationState();
     clearTranscript("Saved conversation was not found. Start a new topic.");
     engineChipEl.textContent = "Engine: waiting";
+    setMemoryChip(null);
   }
 }
 
@@ -264,6 +283,7 @@ clearBtn.addEventListener("click", async () => {
   topicInput.value = "";
   clearTranscript("Started a fresh thread.");
   engineChipEl.textContent = "Engine: waiting";
+  setMemoryChip(null);
   await loadHistory();
 });
 
@@ -319,6 +339,7 @@ form.addEventListener("submit", async (event) => {
     clearConversationState();
     transcriptEl.innerHTML = "";
     displayedTranscript = [];
+    setMemoryChip(null);
   }
 
   const conversationId = activeConversationId || undefined;
@@ -368,6 +389,7 @@ form.addEventListener("submit", async (event) => {
       if (chunk.type === "meta") {
         setConversationState(chunk.conversationId, chunk.topic);
         engineChipEl.textContent = `Engine: ${chunk.engine}`;
+        setMemoryChip(chunk.memory || null);
         finalTopic = chunk.topic || finalTopic;
         return;
       }
@@ -384,6 +406,7 @@ form.addEventListener("submit", async (event) => {
       if (chunk.type === "done") {
         totalTurns = chunk.totalTurns ?? totalTurns;
         finalTopic = chunk.topic || finalTopic;
+        setMemoryChip(chunk.memory || null);
         return;
       }
 
@@ -420,6 +443,7 @@ form.addEventListener("submit", async (event) => {
   } catch (error) {
     if (String(error.message || "").toLowerCase().includes("not found")) {
       clearConversationState();
+      setMemoryChip(null);
       await loadHistory();
     }
 
