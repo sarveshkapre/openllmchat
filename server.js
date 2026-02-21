@@ -81,6 +81,13 @@ const DISCUSSION_CHARTER = [
   "Focus on claims, constraints, decisions, and unresolved questions."
 ];
 
+const DISCOVERY_MODE_SET = new Set(["exploration", "debate", "synthesis"]);
+const DISCOVERY_MODE_HINTS = {
+  exploration: "Mode: exploration. Generate novel hypotheses and testable experiments.",
+  debate: "Mode: debate. Surface strongest pro/con arguments and identify the core crux.",
+  synthesis: "Mode: synthesis. Converge on decisions, tradeoffs, and an executable action plan."
+};
+
 function readIntEnv(name, fallback, min, max) {
   const raw = Number(process.env[name]);
   const value = Number.isFinite(raw) ? raw : fallback;
@@ -313,12 +320,13 @@ function stripDonePrefix(text) {
     .trim();
 }
 
-function localTurn(topic, transcript, moderatorDirective, brief) {
+function localTurn(topic, transcript, moderatorDirective, brief, mode = "exploration") {
   const recent = transcript.slice(-2).map((entry) => entry.text).join(" ");
   const guidance = moderatorDirective
     ? `Moderator guidance: ${moderatorDirective}.`
     : "Moderator guidance: stay on-topic and add one concrete move.";
   const objectiveHint = brief?.objective ? `Primary objective: ${brief.objective}.` : "";
+  const modeHint = DISCOVERY_MODE_HINTS[mode] || DISCOVERY_MODE_HINTS.exploration;
 
   const seeds = [
     `Let us stay focused on ${topic}. A practical angle is to define one core objective and test it quickly.`,
@@ -333,12 +341,12 @@ function localTurn(topic, transcript, moderatorDirective, brief) {
     ? `I agree with the recent point: \"${recent.slice(0, 100)}...\"`
     : "Opening thought:";
 
-  return `${hook} ${objectiveHint} ${guidance} ${seed}`;
+  return `${hook} ${objectiveHint} ${modeHint} ${guidance} ${seed}`;
 }
 
-async function generateTurn({ topic, speaker, transcript, memory, moderatorDirective, brief }) {
+async function generateTurn({ topic, speaker, transcript, memory, moderatorDirective, brief, mode }) {
   if (!client) {
-    return localTurn(topic, transcript, moderatorDirective, brief);
+    return localTurn(topic, transcript, moderatorDirective, brief, mode);
   }
 
   const prompt = buildContextBlock({
@@ -359,6 +367,7 @@ async function generateTurn({ topic, speaker, transcript, memory, moderatorDirec
         content: [
           `You are ${speaker.name}.`,
           speaker.style,
+          DISCOVERY_MODE_HINTS[mode] || DISCOVERY_MODE_HINTS.exploration,
           "Maintain continuity and avoid topic drift.",
           "Write only substantive content, no meta-commentary."
         ].join(" ")
@@ -372,7 +381,7 @@ async function generateTurn({ topic, speaker, transcript, memory, moderatorDirec
 
   return (
     completion.choices?.[0]?.message?.content?.trim() ||
-    localTurn(topic, transcript, moderatorDirective, brief)
+    localTurn(topic, transcript, moderatorDirective, brief, mode)
   );
 }
 
@@ -452,12 +461,23 @@ function sanitizeConversationStarred(value, fallback = false) {
   return fallback;
 }
 
+function sanitizeConversationMode(value, fallback = "exploration") {
+  const mode = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (!mode) {
+    return fallback;
+  }
+
+  return DISCOVERY_MODE_SET.has(mode) ? mode : fallback;
+}
+
 function hasConversationMetaPayload(body) {
   if (!body || typeof body !== "object") {
     return false;
   }
 
-  return ["title", "starred"].some((key) => Object.prototype.hasOwnProperty.call(body, key));
+  return ["title", "starred", "mode"].some((key) => Object.prototype.hasOwnProperty.call(body, key));
 }
 
 function parseConversationMetaFromBody(body) {
@@ -467,6 +487,9 @@ function parseConversationMetaFromBody(body) {
       : undefined,
     starred: Object.prototype.hasOwnProperty.call(body || {}, "starred")
       ? sanitizeConversationStarred(body.starred, false)
+      : undefined,
+    mode: Object.prototype.hasOwnProperty.call(body || {}, "mode")
+      ? sanitizeConversationMode(body.mode, "exploration")
       : undefined
   };
 }
@@ -478,7 +501,10 @@ function mergeConversationMeta(currentConversation, body, parsedMeta) {
       : sanitizeConversationTitle(currentConversation?.title || "", ""),
     starred: Object.prototype.hasOwnProperty.call(body || {}, "starred")
       ? parsedMeta.starred
-      : sanitizeConversationStarred(currentConversation?.starred, false)
+      : sanitizeConversationStarred(currentConversation?.starred, false),
+    mode: Object.prototype.hasOwnProperty.call(body || {}, "mode")
+      ? parsedMeta.mode
+      : sanitizeConversationMode(currentConversation?.mode, "exploration")
   };
 }
 
@@ -590,7 +616,7 @@ function parseJsonObject(text) {
   }
 }
 
-function localModeratorAssessment({ topic, transcript, brief }) {
+function localModeratorAssessment({ topic, transcript, brief, mode }) {
   const last = transcript[transcript.length - 1];
   const prev = transcript[transcript.length - 2];
 
@@ -601,7 +627,12 @@ function localModeratorAssessment({ topic, transcript, brief }) {
     ? jaccardSimilarity(brief.doneCriteria, last?.text || "") >= 0.42
     : false;
 
-  let directive = "Increase specificity with one concrete actionable point.";
+  let directive =
+    mode === "debate"
+      ? "Strengthen the crux with one argument and one counterargument."
+      : mode === "synthesis"
+        ? "Converge on one decision with tradeoffs and the next step."
+        : "Increase specificity with one concrete actionable point.";
   if (!onTopic) {
     directive = `Steer back to topic: ${topic}.`;
   } else if (repetitive) {
@@ -619,7 +650,7 @@ function localModeratorAssessment({ topic, transcript, brief }) {
   };
 }
 
-async function runModerator({ topic, transcript, memory, currentDirective, brief }) {
+async function runModerator({ topic, transcript, memory, currentDirective, brief, mode }) {
   if (transcript.length < 2) {
     return {
       onTopic: true,
@@ -631,7 +662,7 @@ async function runModerator({ topic, transcript, memory, currentDirective, brief
   }
 
   if (!client) {
-    return localModeratorAssessment({ topic, transcript, brief });
+    return localModeratorAssessment({ topic, transcript, brief, mode });
   }
 
   const recent = transcript
@@ -660,6 +691,7 @@ async function runModerator({ topic, transcript, memory, currentDirective, brief
           `Objective: ${brief?.objective || "(none)"}`,
           `Constraints: ${brief?.constraintsText || "(none)"}`,
           `Done criteria: ${brief?.doneCriteria || "(none)"}`,
+          `Conversation mode: ${mode}`,
           `Current directive: ${currentDirective || "(none)"}`,
           `Memory tokens: ${memoryTokens || "(none)"}`,
           "Recent conversation:",
@@ -669,7 +701,10 @@ async function runModerator({ topic, transcript, memory, currentDirective, brief
           "- repetitive=true if last turns repeat phrasing/claims.",
           "- tooShort=true if content lacks depth.",
           "- done=true only if objective appears complete.",
-          "- directive must be one concise imperative sentence."
+          "- directive must be one concise imperative sentence.",
+          "- In debate mode emphasize strongest opposing arguments and crux.",
+          "- In synthesis mode emphasize convergence and concrete next actions.",
+          "- In exploration mode emphasize novel testable ideas."
         ].join("\n")
       }
     ]
@@ -679,7 +714,7 @@ async function runModerator({ topic, transcript, memory, currentDirective, brief
   const parsed = parseJsonObject(raw);
 
   if (!parsed || typeof parsed !== "object") {
-    return localModeratorAssessment({ topic, transcript, brief });
+    return localModeratorAssessment({ topic, transcript, brief, mode });
   }
 
   return {
@@ -762,6 +797,7 @@ async function resolveConversation(body) {
     topic,
     title: updatedConversation?.title || "",
     starred: Boolean(updatedConversation?.starred),
+    mode: sanitizeConversationMode(updatedConversation?.mode, "exploration"),
     brief,
     agents,
     transcript,
@@ -789,6 +825,7 @@ async function finalizeMemory(conversationId, topic, newEntries, totalTurns) {
 async function runConversationBatch({
   conversationId,
   topic,
+  mode,
   brief,
   agents,
   transcript,
@@ -799,9 +836,15 @@ async function runConversationBatch({
   const newEntries = [];
   const startedAt = Date.now();
   const qualityKeywordSet = getQualityKeywordSet(topic, brief);
+  const modeDefaultDirective =
+    mode === "debate"
+      ? "Debate the strongest opposing positions and expose the crux."
+      : mode === "synthesis"
+        ? "Synthesize toward one decision with clear tradeoffs."
+        : "Maintain topic depth and introduce one testable idea each turn.";
   let moderatorDirective = brief?.objective
     ? `Prioritize this objective: ${brief.objective}`
-    : "Maintain topic depth and avoid repetition.";
+    : modeDefaultDirective;
   let stopReason = "max_turns";
   let repetitionStreak = 0;
   let retriesUsed = 0;
@@ -833,6 +876,7 @@ async function runConversationBatch({
 
       const generated = await generateTurn({
         topic,
+        mode,
         speaker,
         transcript,
         memory,
@@ -912,6 +956,7 @@ async function runConversationBatch({
     if (shouldModerate) {
       const moderation = await runModerator({
         topic,
+        mode,
         brief,
         transcript,
         memory,
@@ -969,6 +1014,7 @@ app.get("/api/conversation/:id", (req, res) => {
     topic: conversation.topic,
     title: conversation.title || "",
     starred: Boolean(conversation.starred),
+    mode: sanitizeConversationMode(conversation.mode, "exploration"),
     parentConversationId: conversation.parentConversationId || null,
     forkFromTurn: Number.isFinite(conversation.forkFromTurn) ? conversation.forkFromTurn : null,
     brief,
@@ -1007,7 +1053,8 @@ app.post("/api/conversation/:id/fork", async (req, res) => {
     const forkTitle = sanitizeConversationTitle(`${sourceTitle} (Fork)`, sourceConversation.topic);
     updateConversationMeta(forkConversationId, {
       title: forkTitle,
-      starred: false
+      starred: false,
+      mode: sanitizeConversationMode(sourceConversation.mode, "exploration")
     });
     const forkConversation = getConversation(forkConversationId);
 
@@ -1045,6 +1092,7 @@ app.post("/api/conversation/:id/fork", async (req, res) => {
       topic: sourceConversation.topic,
       title: forkConversation?.title || forkTitle,
       starred: Boolean(forkConversation?.starred),
+      mode: sanitizeConversationMode(forkConversation?.mode, "exploration"),
       brief: sourceBrief,
       agents: sourceAgents,
       parentConversationId: sourceConversationId,
@@ -1075,6 +1123,7 @@ app.get("/api/conversation/:id/brief", (req, res) => {
     topic: conversation.topic,
     title: conversation.title || "",
     starred: Boolean(conversation.starred),
+    mode: sanitizeConversationMode(conversation.mode, "exploration"),
     brief: getConversationBrief(conversationId)
   });
 });
@@ -1095,6 +1144,7 @@ app.get("/api/conversation/:id/agents", (req, res) => {
     topic: conversation.topic,
     title: conversation.title || "",
     starred: Boolean(conversation.starred),
+    mode: sanitizeConversationMode(conversation.mode, "exploration"),
     agents: mapStoredAgents(getConversationAgents(conversationId))
   });
 });
@@ -1119,6 +1169,7 @@ app.post("/api/conversation/:id/agents", (req, res) => {
     topic: conversation.topic,
     title: conversation.title || "",
     starred: Boolean(conversation.starred),
+    mode: sanitizeConversationMode(conversation.mode, "exploration"),
     agents: mapStoredAgents(getConversationAgents(conversationId))
   });
 });
@@ -1143,7 +1194,8 @@ app.post("/api/conversation/:id/meta", (req, res) => {
     conversationId,
     topic: updatedConversation.topic,
     title: updatedConversation.title || "",
-    starred: Boolean(updatedConversation.starred)
+    starred: Boolean(updatedConversation.starred),
+    mode: sanitizeConversationMode(updatedConversation.mode, "exploration")
   });
 });
 
@@ -1168,6 +1220,7 @@ app.post("/api/conversation/:id/brief", (req, res) => {
     topic: conversation.topic,
     title: conversation.title || "",
     starred: Boolean(conversation.starred),
+    mode: sanitizeConversationMode(conversation.mode, "exploration"),
     brief: getConversationBrief(conversationId)
   });
 });
@@ -1191,6 +1244,7 @@ app.get("/api/conversation/:id/memory", (req, res) => {
     topic: conversation.topic,
     title: conversation.title || "",
     starred: Boolean(conversation.starred),
+    mode: sanitizeConversationMode(conversation.mode, "exploration"),
     brief,
     agents,
     memory
@@ -1211,7 +1265,7 @@ app.post("/api/conversation/stream", async (req, res) => {
       return res.status(setup.status).json({ error: setup.error });
     }
 
-    const { conversationId, topic, title, starred, brief, agents, transcript, turns, memory } = setup;
+    const { conversationId, topic, title, starred, mode, brief, agents, transcript, turns, memory } = setup;
 
     res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
     res.setHeader("Cache-Control", "no-cache");
@@ -1230,6 +1284,7 @@ app.post("/api/conversation/stream", async (req, res) => {
       topic,
       title,
       starred,
+      mode,
       brief,
       agents,
       engine: getEngineLabel(),
@@ -1251,6 +1306,7 @@ app.post("/api/conversation/stream", async (req, res) => {
     const batch = await runConversationBatch({
       conversationId,
       topic,
+      mode,
       brief,
       agents,
       transcript,
@@ -1265,6 +1321,7 @@ app.post("/api/conversation/stream", async (req, res) => {
       topic,
       title,
       starred,
+      mode,
       brief,
       agents,
       turns: batch.newEntries.length,
@@ -1292,12 +1349,11 @@ app.post("/api/conversation", async (req, res) => {
       return res.status(setup.status).json({ error: setup.error });
     }
 
-    const { conversationId, topic, title, starred, brief, agents, transcript, turns, memory } = setup;
+    const { conversationId, topic, title, starred, mode, brief, agents, transcript, turns, memory } = setup;
     const batch = await runConversationBatch({
       conversationId,
       topic,
-      title,
-      starred,
+      mode,
       brief,
       agents,
       transcript,
@@ -1310,6 +1366,7 @@ app.post("/api/conversation", async (req, res) => {
       topic,
       title,
       starred,
+      mode,
       brief,
       agents,
       turns: batch.newEntries.length,

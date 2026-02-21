@@ -49,6 +49,12 @@
           </div>
           <label for="thread-title">Thread title</label>
           <input id="thread-title" type="text" maxlength="96" placeholder="Optional custom title for this thread" />
+          <label for="thread-mode">Discovery mode</label>
+          <select id="thread-mode">
+            <option value="exploration">Exploration</option>
+            <option value="debate">Debate</option>
+            <option value="synthesis">Synthesis</option>
+          </select>
         </section>
         <section class="brief-panel">
           <div class="brief-topbar">
@@ -110,6 +116,7 @@
           <span class="chip" id="engine-chip">Engine: waiting</span>
           <span class="chip" id="memory-chip">Memory: waiting</span>
           <span class="chip" id="quality-chip">Quality: waiting</span>
+          <span class="chip" id="mode-chip">Mode: exploration</span>
           <span class="chip">Ctrl/Cmd+Enter run • Ctrl/Cmd+S save</span>
         </div>
       </section>

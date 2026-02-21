@@ -113,7 +113,8 @@ h1 {
 }
 
 input,
-textarea {
+textarea,
+select {
   flex: 1;
   border: 1px solid rgba(147, 202, 228, 0.26);
   border-radius: 12px;
@@ -130,7 +131,8 @@ textarea {
 }
 
 input:focus,
-textarea:focus {
+textarea:focus,
+select:focus {
   border-color: rgba(137, 255, 212, 0.72);
   box-shadow: 0 0 0 3px rgba(86, 220, 182, 0.16);
 }
@@ -372,6 +374,10 @@ button:disabled {
   font-family: "IBM Plex Mono", monospace;
   color: #98b6c8;
   font-size: 0.68rem;
+}
+
+.thread-mode {
+  color: #bfe5ff;
 }
 
 .conversation-panel {
@@ -619,7 +625,8 @@ h2 {
   }
 
   button,
-  input {
+  input,
+  select {
     width: 100%;
   }
 }

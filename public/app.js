@@ -15,6 +15,7 @@ const objectiveInput = document.querySelector("#objective");
 const constraintsInput = document.querySelector("#constraints");
 const doneCriteriaInput = document.querySelector("#done-criteria");
 const threadTitleInput = document.querySelector("#thread-title");
+const threadModeSelect = document.querySelector("#thread-mode");
 const agentANameInput = document.querySelector("#agent-a-name");
 const agentATempInput = document.querySelector("#agent-a-temp");
 const agentAStyleInput = document.querySelector("#agent-a-style");
@@ -26,6 +27,7 @@ const statusEl = document.querySelector("#status");
 const engineChipEl = document.querySelector("#engine-chip");
 const memoryChipEl = document.querySelector("#memory-chip");
 const qualityChipEl = document.querySelector("#quality-chip");
+const modeChipEl = document.querySelector("#mode-chip");
 const historyListEl = document.querySelector("#history-list");
 const historyStatusEl = document.querySelector("#history-status");
 const memoryInspectorStatusEl = document.querySelector("#memory-inspector-status");
@@ -36,6 +38,7 @@ const memorySummaryListEl = document.querySelector("#memory-summary-list");
 const CONVERSATION_ID_KEY = "openllmchat:conversationId";
 const TOPIC_KEY = "openllmchat:topic";
 const DRAFT_KEY = "openllmchat:draft";
+const DEFAULT_THREAD_MODE = "exploration";
 const DEFAULT_AGENTS = [
   {
     agentId: "agent-a",
@@ -55,6 +58,7 @@ let activeConversationId = localStorage.getItem(CONVERSATION_ID_KEY) || "";
 let activeTopic = localStorage.getItem(TOPIC_KEY) || "";
 let activeTitle = "";
 let activeStarred = false;
+let activeMode = DEFAULT_THREAD_MODE;
 let displayedTranscript = [];
 let memoryState = null;
 let qualityState = null;
@@ -77,6 +81,16 @@ function normalizeThreadTitle(value) {
     .slice(0, 96);
 }
 
+function normalizeThreadMode(value) {
+  const mode = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (["exploration", "debate", "synthesis"].includes(mode)) {
+    return mode;
+  }
+  return DEFAULT_THREAD_MODE;
+}
+
 function setStarButtonState(starred) {
   activeStarred = Boolean(starred);
   toggleStarBtn.dataset.starred = activeStarred ? "1" : "0";
@@ -86,7 +100,10 @@ function setStarButtonState(starred) {
 
 function setThreadMeta(meta) {
   activeTitle = normalizeThreadTitle(meta?.title || "");
+  activeMode = normalizeThreadMode(meta?.mode || DEFAULT_THREAD_MODE);
   threadTitleInput.value = activeTitle;
+  threadModeSelect.value = activeMode;
+  modeChipEl.textContent = `Mode: ${activeMode}`;
   setStarButtonState(Boolean(meta?.starred));
   scheduleDraftPersist();
 }
@@ -94,7 +111,8 @@ function setThreadMeta(meta) {
 function getThreadMetaPayload() {
   return {
     title: normalizeThreadTitle(threadTitleInput.value),
-    starred: activeStarred
+    starred: activeStarred,
+    mode: normalizeThreadMode(threadModeSelect.value)
   };
 }
 
@@ -103,6 +121,7 @@ function buildDraftState() {
     topic: topicInput.value.trim(),
     threadTitle: normalizeThreadTitle(threadTitleInput.value),
     threadStarred: activeStarred,
+    threadMode: normalizeThreadMode(threadModeSelect.value),
     objective: objectiveInput.value.trim(),
     constraintsText: constraintsInput.value.trim(),
     doneCriteria: doneCriteriaInput.value.trim(),
@@ -151,7 +170,8 @@ function restoreDraftState() {
     }
     setThreadMeta({
       title: draft.threadTitle || "",
-      starred: Boolean(draft.threadStarred)
+      starred: Boolean(draft.threadStarred),
+      mode: normalizeThreadMode(draft.threadMode || DEFAULT_THREAD_MODE)
     });
   } catch {
     clearDraftState();
@@ -180,7 +200,8 @@ async function persistThreadMeta(meta, successMessage = "Thread settings saved."
 
   setThreadMeta({
     title: result.title || "",
-    starred: Boolean(result.starred)
+    starred: Boolean(result.starred),
+    mode: normalizeThreadMode(result.mode || DEFAULT_THREAD_MODE)
   });
   persistDraftNow();
   setStatus(successMessage);
@@ -554,7 +575,11 @@ async function forkConversation(turn) {
 
     topicInput.value = result.topic;
     setConversationState(result.conversationId, result.topic);
-    setThreadMeta({ title: result.title || "", starred: Boolean(result.starred) });
+    setThreadMeta({
+      title: result.title || "",
+      starred: Boolean(result.starred),
+      mode: normalizeThreadMode(result.mode || DEFAULT_THREAD_MODE)
+    });
     setBriefFields(result.brief || null);
     setAgentFields(result.agents || null);
     setMemoryChip(result.memory || null);
@@ -595,6 +620,7 @@ function toMarkdownTranscript() {
     `- Topic: ${titleTopic}`,
     `- Title: ${threadTitleInput.value.trim() || "n/a"}`,
     `- Starred: ${activeStarred ? "yes" : "no"}`,
+    `- Mode: ${normalizeThreadMode(threadModeSelect.value)}`,
     `- Conversation ID: ${activeConversationId || "n/a"}`,
     `- Total turns: ${displayedTranscript.length}`,
     `- Memory tokens: ${memoryState?.tokenCount || 0}`,
@@ -645,7 +671,11 @@ async function loadConversation(conversationId) {
 
   topicInput.value = result.topic;
   setConversationState(result.conversationId, result.topic);
-  setThreadMeta({ title: result.title || "", starred: Boolean(result.starred) });
+  setThreadMeta({
+    title: result.title || "",
+    starred: Boolean(result.starred),
+    mode: normalizeThreadMode(result.mode || DEFAULT_THREAD_MODE)
+  });
   setBriefFields(result.brief || null);
   setAgentFields(result.agents || null);
 
@@ -673,7 +703,7 @@ function getVisibleConversations(conversations) {
   }
 
   return conversations.filter((conversation) => {
-    const haystack = `${conversation.title || ""} ${conversation.topic || ""}`.toLowerCase();
+    const haystack = `${conversation.title || ""} ${conversation.topic || ""} ${conversation.mode || ""}`.toLowerCase();
     return haystack.includes(query);
   });
 }
@@ -692,7 +722,11 @@ async function setConversationStar(conversationId, starred) {
   }
 
   if (conversationId === activeConversationId) {
-    setThreadMeta({ title: result.title || "", starred: Boolean(result.starred) });
+    setThreadMeta({
+      title: result.title || "",
+      starred: Boolean(result.starred),
+      mode: normalizeThreadMode(result.mode || DEFAULT_THREAD_MODE)
+    });
   }
 }
 
@@ -750,7 +784,9 @@ function renderHistory(conversations) {
       ? ` • fork@${conversation.forkFromTurn ?? 0}`
       : "";
     const agentMeta = conversation.hasCustomAgents ? " • custom agents" : "";
-    meta.textContent = `${conversation.totalTurns} turns • ${formatUpdatedAt(conversation.updatedAt)}${
+    meta.textContent = `${conversation.totalTurns} turns • ${formatUpdatedAt(conversation.updatedAt)} • ${
+      conversation.mode || DEFAULT_THREAD_MODE
+    }${
       conversation.hasBrief ? " • brief" : ""
     }${agentMeta}${forkMeta}`;
 
@@ -843,6 +879,7 @@ historySearchInput.addEventListener("input", () => {
 for (const field of [
   topicInput,
   threadTitleInput,
+  threadModeSelect,
   objectiveInput,
   constraintsInput,
   doneCriteriaInput,
@@ -896,7 +933,8 @@ toggleStarBtn.addEventListener("click", async () => {
     await persistThreadMeta(
       {
         title: normalizeThreadTitle(threadTitleInput.value),
-        starred: nextStarred
+        starred: nextStarred,
+        mode: normalizeThreadMode(threadModeSelect.value)
       },
       nextStarred ? "Thread starred." : "Thread unstarred."
     );
@@ -1075,7 +1113,9 @@ form.addEventListener("submit", async (event) => {
   const agents = getAgentPayload();
   const threadMeta = getThreadMetaPayload();
   const includeAgents = hasCustomAgentOverrides(agents);
-  const includeThreadMeta = Boolean(threadMeta.title || threadMeta.starred);
+  const includeThreadMeta = Boolean(
+    threadMeta.title || threadMeta.starred || threadMeta.mode !== DEFAULT_THREAD_MODE
+  );
 
   if (!conversationId) {
     transcriptEl.innerHTML = "";
@@ -1102,6 +1142,7 @@ form.addEventListener("submit", async (event) => {
     if (includeThreadMeta) {
       payload.title = threadMeta.title;
       payload.starred = threadMeta.starred;
+      payload.mode = threadMeta.mode;
     }
 
     const response = await fetch("/api/conversation/stream", {
@@ -1134,7 +1175,11 @@ form.addEventListener("submit", async (event) => {
     const handleChunk = (chunk) => {
       if (chunk.type === "meta") {
         setConversationState(chunk.conversationId, chunk.topic);
-        setThreadMeta({ title: chunk.title || "", starred: Boolean(chunk.starred) });
+        setThreadMeta({
+          title: chunk.title || "",
+          starred: Boolean(chunk.starred),
+          mode: normalizeThreadMode(chunk.mode || DEFAULT_THREAD_MODE)
+        });
         engineChipEl.textContent = `Engine: ${chunk.engine}`;
         if (chunk.brief) {
           setBriefFields(chunk.brief);
@@ -1180,7 +1225,11 @@ form.addEventListener("submit", async (event) => {
       if (chunk.type === "done") {
         totalTurns = chunk.totalTurns ?? totalTurns;
         finalTopic = chunk.topic || finalTopic;
-        setThreadMeta({ title: chunk.title || "", starred: Boolean(chunk.starred) });
+        setThreadMeta({
+          title: chunk.title || "",
+          starred: Boolean(chunk.starred),
+          mode: normalizeThreadMode(chunk.mode || DEFAULT_THREAD_MODE)
+        });
         if (chunk.brief) {
           setBriefFields(chunk.brief);
         }

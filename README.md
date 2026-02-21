@@ -31,6 +31,7 @@ Modern web app where two AI agents discuss a user topic in 10-turn batches while
 - Thread Organizer per thread:
   - Custom title and star/pin state
   - Starred threads sort first in history
+  - Discovery mode (`exploration`, `debate`, `synthesis`) persisted per thread
   - History search by topic/title in the UI
 - One-click forking from any turn to branch strategy paths without losing context
 - Conversation history sidebar with one-click thread restore
@@ -97,6 +98,7 @@ Request body:
   "conversationId": "optional-existing-conversation-id",
   "title": "Optional thread title",
   "starred": false,
+  "mode": "debate",
   "objective": "Produce a concrete architecture recommendation",
   "constraintsText": "Low latency, auditability, and minimal cost",
   "doneCriteria": "Both agents align on one plan with tradeoffs and next steps",
@@ -117,21 +119,21 @@ Request body:
 
 `agents` is optional and supports partial updates (`name`, `style`, and `temperature`) for `agent-a` / `agent-b`.
 
-Response includes generated turns, total turns, memory stats, title/starred metadata, brief, agents, quality summary, and stop reason.
+Response includes generated turns, total turns, memory stats, title/starred/mode metadata, brief, agents, quality summary, and stop reason.
 
 ### `POST /api/conversation/stream`
 
 Same behavior as `POST /api/conversation`, but returns newline-delimited JSON chunks for live UI updates:
 
-- `meta`: conversation info, engine, memory stats, title/starred, brief, agents, charter, guardrails
+- `meta`: conversation info, engine, memory stats, title/starred/mode, brief, agents, charter, guardrails
 - `retry`: quality optimizer retry event
 - `turn`: one generated turn plus quality stats
 - `moderator`: moderator assessment/directive
-- `done`: final summary with stop reason, title/starred, brief, agents, quality summary, and updated memory stats
+- `done`: final summary with stop reason, title/starred/mode, brief, agents, quality summary, and updated memory stats
 
 ### `GET /api/conversation/:id`
 
-Returns a saved conversation transcript, topic, title/starred, brief, agents, parent/fork metadata, and memory stats.
+Returns a saved conversation transcript, topic, title/starred/mode, brief, agents, parent/fork metadata, and memory stats.
 
 ### `GET /api/conversation/:id/brief`
 
@@ -147,6 +149,7 @@ Updates thread metadata for an existing conversation:
 
 - `title` (max 96 chars)
 - `starred` (`true`/`false`)
+- `mode` (`exploration` | `debate` | `synthesis`)
 
 ### `GET /api/conversation/:id/agents`
 
@@ -183,4 +186,4 @@ Returns compressed memory details for a conversation:
 
 ### `GET /api/conversations?limit=30`
 
-Returns recent conversation threads with topic, title/starred, updated time, turn count, `hasBrief`, `hasCustomAgents`, and fork metadata.
+Returns recent conversation threads with topic, title/starred/mode, updated time, turn count, `hasBrief`, `hasCustomAgents`, and fork metadata.

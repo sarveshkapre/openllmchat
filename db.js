@@ -15,6 +15,7 @@ db.exec(`
     topic TEXT NOT NULL,
     title TEXT NOT NULL DEFAULT '',
     starred INTEGER NOT NULL DEFAULT 0,
+    mode TEXT NOT NULL DEFAULT 'exploration',
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
@@ -112,6 +113,7 @@ ensureColumnExists("conversations", "parent_conversation_id", "TEXT");
 ensureColumnExists("conversations", "fork_from_turn", "INTEGER");
 ensureColumnExists("conversations", "title", "TEXT NOT NULL DEFAULT ''");
 ensureColumnExists("conversations", "starred", "INTEGER NOT NULL DEFAULT 0");
+ensureColumnExists("conversations", "mode", "TEXT NOT NULL DEFAULT 'exploration'");
 db.exec(`
   CREATE INDEX IF NOT EXISTS idx_conversations_parent
     ON conversations(parent_conversation_id, fork_from_turn);
@@ -125,6 +127,7 @@ const getConversationStmt = db.prepare(`
     topic,
     title,
     starred,
+    mode,
     parent_conversation_id AS parentConversationId,
     fork_from_turn AS forkFromTurn,
     created_at AS createdAt,
@@ -178,6 +181,7 @@ const listConversationsStmt = db.prepare(`
     c.topic,
     c.title,
     c.starred,
+    c.mode,
     c.parent_conversation_id AS parentConversationId,
     c.fork_from_turn AS forkFromTurn,
     c.created_at AS createdAt,
@@ -205,6 +209,7 @@ const updateConversationMetaStmt = db.prepare(`
   SET
     title = @title,
     starred = @starred,
+    mode = @mode,
     updated_at = CURRENT_TIMESTAMP
   WHERE id = @conversationId
 `);
@@ -474,7 +479,8 @@ function getConversation(conversationId) {
 
   return {
     ...row,
-    starred: Boolean(row.starred)
+    starred: Boolean(row.starred),
+    mode: row.mode || "exploration"
   };
 }
 
@@ -513,6 +519,7 @@ function listConversations(limit = 20) {
   return listConversationsStmt.all(safeLimit).map((row) => ({
     ...row,
     starred: Boolean(row.starred),
+    mode: row.mode || "exploration",
     hasBrief: Boolean(row.hasBrief),
     hasCustomAgents: Boolean(row.hasCustomAgents)
   }));
@@ -542,7 +549,8 @@ function updateConversationMeta(conversationId, meta) {
   updateConversationMetaStmt.run({
     conversationId,
     title: meta.title || "",
-    starred: meta.starred ? 1 : 0
+    starred: meta.starred ? 1 : 0,
+    mode: meta.mode || "exploration"
   });
 }
 
