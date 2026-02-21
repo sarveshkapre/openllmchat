@@ -99,9 +99,9 @@ const DISCUSSION_CHARTER = [
 const DISCOVERY_MODE_SET = new Set(["exploration", "debate", "synthesis"]);
 const DISCOVERY_LAB_MODES = ["exploration", "debate", "synthesis"];
 const DISCOVERY_MODE_HINTS = {
-  exploration: "Mode: exploration. Introduce fresh angles, concrete examples, and practical experiments.",
-  debate: "Mode: debate. Surface strongest pro/con arguments and identify the core crux.",
-  synthesis: "Mode: synthesis. Converge on decisions, tradeoffs, and an executable action plan."
+  exploration: "In exploration mode, introduce fresh angles, concrete examples, and practical experiments.",
+  debate: "In debate mode, surface strongest pro/con arguments and identify the core crux.",
+  synthesis: "In synthesis mode, converge on decisions, tradeoffs, and an executable action plan."
 };
 
 function readIntEnv(name, fallback, min, max) {
@@ -843,34 +843,44 @@ function turnTakingContextBlock(topic, transcript) {
 
 function localTurn(topic, transcript, moderatorDirective, brief, mode = "exploration", references = []) {
   const previous = transcript[transcript.length - 1];
-  const guidance = moderatorDirective
-    ? `Moderator guidance: ${moderatorDirective}.`
-    : "Moderator guidance: stay on-topic and add one concrete point.";
-  const objectiveHint = brief?.objective ? `Primary objective: ${brief.objective}.` : "";
-  const modeHint = DISCOVERY_MODE_HINTS[mode] || DISCOVERY_MODE_HINTS.exploration;
-  const citationHint =
-    mode === "debate" && Array.isArray(references) && references.length > 0
-      ? `Evidence note [R1]: ${references[0].title || references[0].url}.`
-      : "";
-  const previousSnippet = previous ? compactLine(previous.text, 120) : "";
+  const objectiveHint = brief?.objective ? compactLine(brief.objective, 90) : "";
+  const nudgesByMode = {
+    exploration: [
+      "A practical next step is to test one small version of this idea.",
+      "The fastest way to learn here is to pick one concrete example and stress-test it.",
+      "I would ground this with one observable signal so we can validate it."
+    ],
+    debate: [
+      "The strongest test now is the best counterargument against this claim.",
+      "To make this robust, we should challenge the weakest assumption directly.",
+      "I want to compare this with the most credible opposing view before deciding."
+    ],
+    synthesis: [
+      "We can now converge on one decision and name the tradeoff clearly.",
+      "Let's turn this into a single next action with a clear owner and timeline.",
+      "I'd close this by selecting one path and noting what we are explicitly not doing."
+    ]
+  };
+  const modeNudges = nudgesByMode[mode] || nudgesByMode.exploration;
+  const modeNudge = modeNudges[transcript.length % modeNudges.length];
 
-  const starters = [
-    `My first take on ${topic} is that we should keep one clear objective and pressure-test it with concrete examples.`,
-    `On ${topic}, I'd start from the biggest constraint and then choose one practical path to test quickly.`,
-    `For ${topic}, the strongest move is to pick one measurable claim, not a broad theory, and iterate from there.`
+  if (!previous) {
+    const openers = [
+      `My first view on ${topic} is that strong outcomes usually come from a small set of consistent choices over time. ${modeNudge}`,
+      `On ${topic}, I think progress comes from clear commitments, not abstract principles alone. ${modeNudge}`,
+      `For ${topic}, I'd frame it as an evolving process: test, learn, and refine as new evidence appears. ${modeNudge}`
+    ];
+    const line = openers[transcript.length % openers.length];
+    return objectiveHint ? `${line} A useful constraint is: ${objectiveHint}.` : line;
+  }
+
+  const responses = [
+    `I see your point, and the part that stands out is the practical framing. ${modeNudge}`,
+    `That tracks for me, but the assumption I'd challenge is how we define success in this context. ${modeNudge}`,
+    `You're pointing at something real there. I would make it sharper by tying it to one measurable signal. ${modeNudge}`
   ];
-  const followUps = [
-    `I hear your point about "${previousSnippet}", and I agree with the direction; the tradeoff we still need to resolve is speed versus depth.`,
-    `That's a useful point about "${previousSnippet}". I'd sharpen it by naming one assumption we can challenge next.`,
-    `Good call on "${previousSnippet}". The missing piece is one concrete example that would prove or disprove the claim.`
-  ];
-
-  const seedSource = previous ? followUps : starters;
-  const seed = seedSource[transcript.length % seedSource.length];
-
-  return `${seed} ${objectiveHint} ${modeHint} ${guidance} ${citationHint}`
-    .replace(/\s+/g, " ")
-    .trim();
+  const line = responses[transcript.length % responses.length];
+  return objectiveHint ? `${line} We should keep the objective in frame: ${objectiveHint}.` : line;
 }
 
 async function generateTurn({ topic, speaker, transcript, memory, moderatorDirective, brief, mode, references }) {
@@ -889,40 +899,49 @@ async function generateTurn({ topic, speaker, transcript, memory, moderatorDirec
   const turnTakingPrompt = turnTakingContextBlock(topic, transcript);
   const userPrompt = [basePrompt, turnTakingPrompt, buildReferenceBlock(references)].join("\n");
 
-  const result = await createChatCompletionWithFallback({
-    client,
-    model,
-    fallbackModel,
-    reasoningEffort,
-    temperature: speaker.temperature,
-    messages: [
-      {
-        role: "system",
-        content: [
-          `You are ${speaker.name}.`,
-          speaker.style,
-          DISCOVERY_MODE_HINTS[mode] || DISCOVERY_MODE_HINTS.exploration,
-          "Maintain continuity and avoid topic drift.",
-          "Turn-taking rule: respond to the previous agent reply before introducing your new point.",
-          "When a previous reply exists, directly address it in your first sentence.",
-          "Write 2-4 conversational sentences in plain language, without bullets.",
-          "Sound like a thoughtful colleague, not a formal report writer.",
-          "Avoid repetitive template openers like 'Agent X's point' or 'Building on that' in every turn.",
-          "Prefer concrete claims, examples, or tradeoffs over generic process talk.",
-          "Write only substantive content, no meta-commentary.",
-          mode === "debate"
-            ? "For factual claims, cite supporting references using [R#] from the provided reference notes."
-            : "Use reference notes when useful, but keep the response concise."
-        ].join(" ")
-      },
-      {
-        role: "user",
-        content: userPrompt
-      }
-    ]
-  });
+  try {
+    const result = await createChatCompletionWithFallback({
+      client,
+      model,
+      fallbackModel,
+      reasoningEffort,
+      temperature: speaker.temperature,
+      messages: [
+        {
+          role: "system",
+          content: [
+            `You are ${speaker.name}.`,
+            speaker.style,
+            DISCOVERY_MODE_HINTS[mode] || DISCOVERY_MODE_HINTS.exploration,
+            "Maintain continuity and avoid topic drift.",
+            "Turn-taking rule: respond to the previous agent reply before introducing your new point.",
+            "When a previous reply exists, directly address it in your first sentence.",
+            "Write 2-4 conversational sentences in plain language, without bullets.",
+            "Sound like a thoughtful colleague, not a formal report writer.",
+            "Avoid repetitive template openers like 'Agent X's point' or 'Building on that' in every turn.",
+            "Prefer concrete claims, examples, or tradeoffs over generic process talk.",
+            "Do not repeat internal control labels such as 'Mode', 'Moderator directive', 'Instructions', or 'Turn-taking context'.",
+            "Write only substantive content, no meta-commentary.",
+            mode === "debate"
+              ? "For factual claims, cite supporting references using [R#] from the provided reference notes."
+              : "Use reference notes when useful, but keep the response concise."
+          ].join(" ")
+        },
+        {
+          role: "user",
+          content: userPrompt
+        }
+      ]
+    });
 
-  return extractAssistantText(result.completion) || localTurn(topic, transcript, moderatorDirective, brief, mode, references);
+    return (
+      extractAssistantText(result.completion) ||
+      localTurn(topic, transcript, moderatorDirective, brief, mode, references)
+    );
+  } catch (error) {
+    console.error("Model generation failed, using local fallback:", error?.message || error);
+    return localTurn(topic, transcript, moderatorDirective, brief, mode, references);
+  }
 }
 
 function parseTurns(rawTurns) {

@@ -32,6 +32,15 @@ function isReasoningEffortUnsupportedError(error) {
   return message.includes("reasoning_effort") && (message.includes("unsupported") || message.includes("not support"));
 }
 
+function isTemperatureUnsupportedError(error) {
+  const message = errorText(error);
+  const param = String(error?.param || error?.error?.param || "").toLowerCase();
+  return (
+    param === "temperature" ||
+    (message.includes("temperature") && (message.includes("unsupported") || message.includes("default (1)")))
+  );
+}
+
 function isModelAccessError(error) {
   const message = errorText(error);
   return (
@@ -67,7 +76,9 @@ async function createChatCompletionWithFallback({
       messages
     };
 
-    if (Number.isFinite(Number(temperature))) {
+    // Some reasoning models reject non-default temperature values.
+    const shouldSendTemperature = !isReasoningModel(candidate);
+    if (shouldSendTemperature && Number.isFinite(Number(temperature))) {
       payload.temperature = Number(temperature);
     }
 
@@ -77,30 +88,39 @@ async function createChatCompletionWithFallback({
     }
 
     try {
-      const completion = await client.chat.completions.create(payload);
-      return {
-        completion,
-        modelUsed: candidate,
-        reasoningEffort: payload.reasoning_effort || null,
-        usedFallback: candidate !== primaryModel
-      };
-    } catch (error) {
-      if (payload.reasoning_effort && isReasoningEffortUnsupportedError(error)) {
+      let finalPayload = { ...payload };
+      let droppedTemperature = false;
+      let droppedReasoning = false;
+
+      while (true) {
         try {
-          delete payload.reasoning_effort;
-          const completion = await client.chat.completions.create(payload);
+          const completion = await client.chat.completions.create(finalPayload);
           return {
             completion,
             modelUsed: candidate,
-            reasoningEffort: null,
+            reasoningEffort: finalPayload.reasoning_effort || null,
             usedFallback: candidate !== primaryModel
           };
-        } catch (retryError) {
-          lastError = retryError;
+        } catch (retryableError) {
+          if (!droppedTemperature && Object.prototype.hasOwnProperty.call(finalPayload, "temperature")) {
+            if (isTemperatureUnsupportedError(retryableError)) {
+              droppedTemperature = true;
+              delete finalPayload.temperature;
+              continue;
+            }
+          }
+
+          if (!droppedReasoning && finalPayload.reasoning_effort && isReasoningEffortUnsupportedError(retryableError)) {
+            droppedReasoning = true;
+            delete finalPayload.reasoning_effort;
+            continue;
+          }
+
+          throw retryableError;
         }
-      } else {
-        lastError = error;
       }
+    } catch (error) {
+      lastError = error;
 
       if (!isModelAccessError(lastError)) {
         throw lastError;
