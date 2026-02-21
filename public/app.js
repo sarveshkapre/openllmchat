@@ -97,6 +97,28 @@ function setStatus(text) {
   statusEl.textContent = text;
 }
 
+function jsonRequestOptions(method = "GET", body) {
+  const options = { method };
+  if (body !== undefined) {
+    options.headers = { "Content-Type": "application/json" };
+    options.body = JSON.stringify(body);
+  }
+  return options;
+}
+
+async function fetchJson(url, options = {}) {
+  const response = await fetch(url, options);
+  const contentType = String(response.headers.get("content-type") || "").toLowerCase();
+  const isJson = contentType.includes("application/json");
+  const result = isJson ? await response.json() : null;
+
+  if (!response.ok) {
+    throw new Error(result?.error || `Request failed (${response.status})`);
+  }
+
+  return result;
+}
+
 function setHistoryStatus(text) {
   historyStatusEl.textContent = text;
 }
@@ -212,18 +234,10 @@ async function persistThreadMeta(meta, successMessage = "Thread settings saved."
     return false;
   }
 
-  const response = await fetch(`/api/conversation/${encodeURIComponent(activeConversationId)}/meta`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify(meta)
-  });
-  const result = await response.json();
-
-  if (!response.ok) {
-    throw new Error(result.error || "Could not save thread settings");
-  }
+  const result = await fetchJson(
+    `/api/conversation/${encodeURIComponent(activeConversationId)}/meta`,
+    jsonRequestOptions("POST", meta)
+  );
 
   setThreadMeta({
     title: result.title || "",
@@ -442,13 +456,7 @@ async function refreshMemoryInspector() {
   setMemoryInspectorStatus("Refreshing memory...");
 
   try {
-    const response = await fetch(`/api/conversation/${encodeURIComponent(activeConversationId)}/memory`);
-    const result = await response.json();
-
-    if (!response.ok) {
-      throw new Error(result.error || "Could not refresh memory");
-    }
-
+    const result = await fetchJson(`/api/conversation/${encodeURIComponent(activeConversationId)}/memory`);
     renderMemoryInspector(result);
   } catch (error) {
     clearMemoryInspector("Memory unavailable.");
@@ -530,11 +538,7 @@ async function refreshInsightSnapshot() {
 
   setInsightStatus("Refreshing insight snapshot...");
   try {
-    const response = await fetch(`/api/conversation/${encodeURIComponent(activeConversationId)}/insights`);
-    const result = await response.json();
-    if (!response.ok) {
-      throw new Error(result.error || "Could not refresh insights");
-    }
+    const result = await fetchJson(`/api/conversation/${encodeURIComponent(activeConversationId)}/insights`);
     renderInsightSnapshot(result);
   } catch (error) {
     clearInsightSnapshot("Insights unavailable.");
@@ -660,11 +664,7 @@ async function refreshDiscoveryRadar() {
 
   setDiscoveryStatus("Refreshing discovery radar...");
   try {
-    const response = await fetch(`/api/conversation/${encodeURIComponent(activeConversationId)}/discoveries`);
-    const result = await response.json();
-    if (!response.ok) {
-      throw new Error(result.error || "Could not refresh discovery radar");
-    }
+    const result = await fetchJson(`/api/conversation/${encodeURIComponent(activeConversationId)}/discoveries`);
     renderDiscoveryRadar(result);
   } catch (error) {
     clearDiscoveryRadar("Discovery radar unavailable.");
@@ -736,11 +736,7 @@ async function refreshScorecard() {
 
   setScoreStatus("Refreshing score...");
   try {
-    const response = await fetch(`/api/conversation/${encodeURIComponent(activeConversationId)}/score`);
-    const result = await response.json();
-    if (!response.ok) {
-      throw new Error(result.error || "Could not refresh score");
-    }
+    const result = await fetchJson(`/api/conversation/${encodeURIComponent(activeConversationId)}/score`);
     renderScorecard(result);
   } catch (error) {
     clearScorecard("Score unavailable.");
@@ -836,17 +832,7 @@ async function runDiscoveryLab() {
   setStatus("Discovery Lab running...");
 
   try {
-    const response = await fetch("/api/conversation/lab", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(payload)
-    });
-    const result = await response.json();
-    if (!response.ok) {
-      throw new Error(result.error || "Could not run discovery lab");
-    }
+    const result = await fetchJson("/api/conversation/lab", jsonRequestOptions("POST", payload));
 
     renderLabResults(result.runs || []);
     const runs = result.runs || [];
@@ -1112,18 +1098,10 @@ async function forkConversation(turn) {
 
   try {
     setStatus(`Forking thread from turn ${turn}...`);
-    const response = await fetch(`/api/conversation/${encodeURIComponent(activeConversationId)}/fork`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({ turn })
-    });
-    const result = await response.json();
-
-    if (!response.ok) {
-      throw new Error(result.error || "Could not fork conversation");
-    }
+    const result = await fetchJson(
+      `/api/conversation/${encodeURIComponent(activeConversationId)}/fork`,
+      jsonRequestOptions("POST", { turn })
+    );
 
     topicInput.value = result.topic;
     setConversationState(result.conversationId, result.topic);
@@ -1213,12 +1191,7 @@ function formatUpdatedAt(iso) {
 }
 
 async function loadConversation(conversationId) {
-  const response = await fetch(`/api/conversation/${encodeURIComponent(conversationId)}`);
-  const result = await response.json();
-
-  if (!response.ok) {
-    throw new Error(result.error || "Could not load conversation");
-  }
+  const result = await fetchJson(`/api/conversation/${encodeURIComponent(conversationId)}`);
 
   topicInput.value = result.topic;
   setConversationState(result.conversationId, result.topic);
@@ -1260,17 +1233,10 @@ function getVisibleConversations(conversations) {
 }
 
 async function setConversationStar(conversationId, starred) {
-  const response = await fetch(`/api/conversation/${encodeURIComponent(conversationId)}/meta`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({ starred })
-  });
-  const result = await response.json();
-  if (!response.ok) {
-    throw new Error(result.error || "Could not update thread star");
-  }
+  const result = await fetchJson(
+    `/api/conversation/${encodeURIComponent(conversationId)}/meta`,
+    jsonRequestOptions("POST", { starred })
+  );
 
   if (conversationId === activeConversationId) {
     setThreadMeta({
@@ -1369,13 +1335,7 @@ function renderHistory(conversations) {
 
 async function loadHistory() {
   try {
-    const response = await fetch("/api/conversations?limit=30");
-    const result = await response.json();
-
-    if (!response.ok) {
-      throw new Error(result.error || "Could not load history");
-    }
-
+    const result = await fetchJson("/api/conversations?limit=30");
     cachedConversations = result.conversations || [];
     renderHistory(cachedConversations);
   } catch (error) {
@@ -1626,18 +1586,10 @@ async function persistBrief(brief, successMessage = "Conversation brief saved.")
     return false;
   }
 
-  const response = await fetch(`/api/conversation/${encodeURIComponent(activeConversationId)}/brief`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify(brief)
-  });
-  const result = await response.json();
-
-  if (!response.ok) {
-    throw new Error(result.error || "Could not save brief");
-  }
+  const result = await fetchJson(
+    `/api/conversation/${encodeURIComponent(activeConversationId)}/brief`,
+    jsonRequestOptions("POST", brief)
+  );
 
   setBriefFields(result.brief || null);
   persistDraftNow();
@@ -1653,18 +1605,10 @@ async function persistAgents(agents, successMessage = "Agent studio settings sav
     return false;
   }
 
-  const response = await fetch(`/api/conversation/${encodeURIComponent(activeConversationId)}/agents`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({ agents })
-  });
-  const result = await response.json();
-
-  if (!response.ok) {
-    throw new Error(result.error || "Could not save agents");
-  }
+  const result = await fetchJson(
+    `/api/conversation/${encodeURIComponent(activeConversationId)}/agents`,
+    jsonRequestOptions("POST", { agents })
+  );
 
   setAgentFields(result.agents || null);
   persistDraftNow();
