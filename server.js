@@ -6,8 +6,10 @@ import { fileURLToPath } from "node:url";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import OpenAI from "openai";
 import {
+  clearConversations,
   createConversation,
   dbPath,
+  deleteConversation,
   getConversation,
   getConversationAgents,
   getConversationBrief,
@@ -2272,6 +2274,25 @@ app.get("/api/conversations", (req, res) => {
   const limit = Math.min(100, Math.max(1, Number.isFinite(requestedLimit) ? requestedLimit : 20));
   const conversations = listConversations(limit);
   return res.json({ conversations });
+});
+
+app.delete("/api/conversations", (req, res) => {
+  const deletedCount = clearConversations();
+  return res.json({ ok: true, deletedCount });
+});
+
+app.delete("/api/conversation/:id", (req, res) => {
+  const conversationId = sanitizeConversationId(req.params.id);
+  if (!conversationId) {
+    return res.status(400).json({ error: "Conversation id is required." });
+  }
+
+  const removed = deleteConversation(conversationId);
+  if (!removed) {
+    return res.status(404).json({ error: "Conversation not found." });
+  }
+
+  return res.json({ ok: true, conversationId });
 });
 
 app.post("/api/conversation/lab", async (req, res) => {

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Moon, PanelLeft, PanelLeftClose, Plus, RefreshCcw, Sun } from "lucide-react";
+import { Moon, PanelLeft, PanelLeftClose, Plus, RefreshCcw, Sun, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -48,6 +48,7 @@ export default function HomePage() {
 
   const [isRunning, setIsRunning] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyClearing, setHistoryClearing] = useState(false);
 
   const [messages, setMessages] = useState([]);
   const [conversations, setConversations] = useState([]);
@@ -268,6 +269,29 @@ export default function HomePage() {
     await loadHistory();
   }, [clearThreadState, loadHistory]);
 
+  const onClearHistory = useCallback(async () => {
+    if (!conversations.length) {
+      return;
+    }
+
+    const confirmed = window.confirm("Delete all saved conversations?");
+    if (!confirmed) {
+      return;
+    }
+
+    setHistoryClearing(true);
+    try {
+      const result = await fetchJson("/api/conversations", { method: "DELETE" });
+      clearThreadState();
+      setConversations([]);
+      setStatus(`Deleted ${Number(result?.deletedCount || 0)} conversations.`);
+    } catch (error) {
+      setStatus(error?.message || "Could not clear history.");
+    } finally {
+      setHistoryClearing(false);
+    }
+  }, [clearThreadState, conversations.length, fetchJson]);
+
   const historyStatus = useMemo(() => {
     if (historyLoading) {
       return "Loading threads...";
@@ -313,15 +337,26 @@ export default function HomePage() {
               <CardHeader className="border-b pb-4">
                 <div className="flex items-center justify-between gap-2">
                   <CardTitle className="text-base">Saved conversations</CardTitle>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label="Refresh conversation history"
-                    onClick={loadHistory}
-                    disabled={historyLoading}
-                  >
-                    <RefreshCcw className={cn("size-4", historyLoading && "animate-spin")} />
-                  </Button>
+                  <div className="flex items-center gap-1">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      aria-label="Refresh conversation history"
+                      onClick={loadHistory}
+                      disabled={historyLoading || historyClearing}
+                    >
+                      <RefreshCcw className={cn("size-4", historyLoading && "animate-spin")} />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      aria-label="Delete all saved conversations"
+                      onClick={onClearHistory}
+                      disabled={historyLoading || historyClearing || conversations.length === 0}
+                    >
+                      <Trash2 className={cn("size-4", historyClearing && "animate-pulse")} />
+                    </Button>
+                  </div>
                 </div>
                 <CardDescription>{historyStatus}</CardDescription>
               </CardHeader>

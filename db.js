@@ -272,6 +272,15 @@ const listConversationsStmt = db.prepare(`
   LIMIT ?
 `);
 
+const deleteConversationStmt = db.prepare(`
+  DELETE FROM conversations
+  WHERE id = ?
+`);
+
+const clearConversationsStmt = db.prepare(`
+  DELETE FROM conversations
+`);
+
 const updateConversationMetaStmt = db.prepare(`
   UPDATE conversations
   SET
@@ -815,6 +824,14 @@ function listConversations(limit = 20) {
   }));
 }
 
+function deleteConversation(conversationId) {
+  return deleteConversationStmt.run(conversationId).changes > 0;
+}
+
+function clearConversations() {
+  return clearConversationsStmt.run().changes;
+}
+
 function getConversationBrief(conversationId) {
   return (
     getConversationBriefStmt.get(conversationId) || {
@@ -1051,8 +1068,10 @@ function getRecentSummaries(conversationId, limit = 6) {
 }
 
 export {
+  clearConversations,
   createConversation,
   dbPath,
+  deleteConversation,
   getConversation,
   getConversationBrief,
   getConversationAgents,
