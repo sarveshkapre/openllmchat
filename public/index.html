@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="light">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -7,277 +7,53 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <div class="bg-orb orb-left" aria-hidden="true"></div>
-    <div class="bg-orb orb-right" aria-hidden="true"></div>
-
-    <main class="app-shell">
-      <header class="app-header">
-        <p class="eyebrow">openllmchat</p>
-        <h1>Two AI agents. One focused thread.</h1>
-        <p class="subtitle">
-          Run a 10-turn dialog with high-value memory compression, semantic context, moderator guardrails, and thread forking.
-        </p>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <p class="brand">openllmchat</p>
+          <h1>Two agents, one focused thread.</h1>
+        </div>
+        <div class="top-actions">
+          <button id="theme-toggle" type="button" class="secondary">Dark theme</button>
+          <button id="new-thread-btn" type="button" class="secondary">New thread</button>
+        </div>
       </header>
 
-      <section class="control-panel">
-        <form id="conversation-form" class="conversation-form">
-          <label for="topic">Conversation topic</label>
-          <div class="input-row">
-            <input
-              id="topic"
-              name="topic"
-              type="text"
-              placeholder="Example: Designing a launch strategy for an AI tutoring app"
-              required
-            />
-            <button id="start-btn" type="submit">Start live 10-turn dialog</button>
-            <button id="lab-btn" class="secondary" type="button">Run Discovery Lab</button>
+      <section class="panel composer">
+        <form id="conversation-form">
+          <label for="topic">Topic</label>
+          <div class="row">
+            <input id="topic" name="topic" type="text" placeholder="Example: How should AI tutors personalize feedback?" required />
+            <button id="start-btn" type="submit">Run 10 turns</button>
           </div>
         </form>
-        <section class="thread-panel">
-          <div class="brief-topbar">
-            <h2>Thread Organizer</h2>
-            <div class="thread-actions">
-              <button id="toggle-star-btn" class="secondary" type="button">Star</button>
-              <button id="save-thread-btn" class="secondary" type="button">Save thread</button>
-            </div>
-          </div>
-          <label for="thread-title">Thread title</label>
-          <input id="thread-title" type="text" maxlength="96" placeholder="Optional custom title for this thread" />
-          <label for="thread-mode">Discovery mode</label>
-          <select id="thread-mode">
-            <option value="exploration">Exploration</option>
-            <option value="debate">Debate</option>
-            <option value="synthesis">Synthesis</option>
-          </select>
-        </section>
-        <section class="brief-panel">
-          <div class="brief-topbar">
-            <h2>Conversation Brief</h2>
-            <button id="save-brief-btn" class="secondary" type="button">Save brief</button>
-          </div>
-          <div class="brief-grid">
-            <label for="objective">Objective</label>
-            <textarea
-              id="objective"
-              name="objective"
-              rows="2"
-              placeholder="What should this thread accomplish?"
-            ></textarea>
-            <label for="constraints">Constraints</label>
-            <textarea
-              id="constraints"
-              name="constraints"
-              rows="2"
-              placeholder="Budget, latency, compliance, timeline, etc."
-            ></textarea>
-            <label for="done-criteria">Done criteria</label>
-            <textarea
-              id="done-criteria"
-              name="doneCriteria"
-              rows="2"
-              placeholder="How should agents decide the objective is complete?"
-            ></textarea>
-          </div>
-        </section>
-        <section class="agent-panel">
-          <div class="brief-topbar">
-            <h2>Agent Studio</h2>
-            <button id="save-agents-btn" class="secondary" type="button">Save agents</button>
-          </div>
-          <div class="agent-grid">
-            <article class="agent-card">
-              <p class="agent-label">Agent A</p>
-              <label for="agent-a-name">Name</label>
-              <input id="agent-a-name" type="text" placeholder="Agent Atlas" />
-              <label for="agent-a-temp">Temperature</label>
-              <input id="agent-a-temp" type="number" min="0" max="1.2" step="0.01" />
-              <label for="agent-a-style">Style</label>
-              <textarea id="agent-a-style" rows="2" placeholder="Analytical, concrete, strategic."></textarea>
-            </article>
-            <article class="agent-card">
-              <p class="agent-label">Agent B</p>
-              <label for="agent-b-name">Name</label>
-              <input id="agent-b-name" type="text" placeholder="Agent Nova" />
-              <label for="agent-b-temp">Temperature</label>
-              <input id="agent-b-temp" type="number" min="0" max="1.2" step="0.01" />
-              <label for="agent-b-style">Style</label>
-              <textarea id="agent-b-style" rows="2" placeholder="Creative, precise, challenges assumptions."></textarea>
-            </article>
-          </div>
-        </section>
-        <div class="meta-row">
-          <span class="chip">10 turns fixed</span>
-          <span class="chip" id="engine-chip">Engine: waiting</span>
-          <span class="chip" id="memory-chip">Memory: waiting</span>
-          <span class="chip" id="quality-chip">Quality: waiting</span>
-          <span class="chip" id="goal-chip">Goal: waiting</span>
-          <span class="chip" id="mode-chip">Mode: exploration</span>
-          <span class="chip">Ctrl/Cmd+Enter run • Ctrl/Cmd+S save</span>
+        <p id="status" class="status">Enter a topic and run.</p>
+        <div class="chips">
+          <span id="engine-chip" class="chip">Engine: waiting</span>
+          <span id="turn-chip" class="chip">Turns: 0</span>
         </div>
       </section>
 
-      <section class="workspace">
-        <aside class="history-panel">
-          <div class="history-topbar">
+      <section class="layout">
+        <section class="panel transcript-panel">
+          <h2>Transcript</h2>
+          <ol id="transcript" class="transcript" aria-live="polite"></ol>
+        </section>
+
+        <aside class="panel history-panel">
+          <div class="history-head">
             <h2>Threads</h2>
-            <button id="refresh-history-btn" class="secondary" type="button">Refresh</button>
+            <button id="refresh-history-btn" type="button" class="secondary">Refresh</button>
           </div>
-          <input id="history-search" type="search" placeholder="Search threads by title or topic" />
-          <div id="history-status" class="history-status">Loading threads...</div>
+          <p id="history-status" class="history-status">Loading threads...</p>
           <ul id="history-list" class="history-list" aria-live="polite"></ul>
         </aside>
-
-        <section class="conversation-panel">
-          <div class="conversation-topbar">
-            <h2>Live transcript</h2>
-            <div class="conversation-actions">
-              <button id="copy-btn" class="secondary" type="button">Copy</button>
-              <button id="download-btn" class="secondary" type="button">Download</button>
-              <button id="clear-btn" class="secondary" type="button">New thread</button>
-            </div>
-          </div>
-          <div id="status" class="status">Enter a topic to begin.</div>
-          <ol id="transcript" class="transcript" aria-live="polite"></ol>
-          <section class="memory-inspector">
-            <div class="memory-inspector-topbar">
-              <h3>Memory Inspector</h3>
-              <button id="refresh-memory-btn" class="secondary" type="button">Refresh memory</button>
-            </div>
-            <p id="memory-inspector-status" class="memory-inspector-status">
-              Start or restore a thread to inspect memory state.
-            </p>
-            <div class="memory-inspector-grid">
-              <article class="memory-card">
-                <h4>High-value tokens</h4>
-                <ul id="memory-token-list" class="memory-list"></ul>
-              </article>
-              <article class="memory-card">
-                <h4>Semantic memory</h4>
-                <ul id="memory-semantic-list" class="memory-list"></ul>
-              </article>
-              <article class="memory-card">
-                <h4>Micro summaries</h4>
-                <ul id="memory-summary-list" class="memory-list"></ul>
-              </article>
-              <article class="memory-card">
-                <h4>Meso summaries</h4>
-                <ul id="memory-meso-list" class="memory-list"></ul>
-              </article>
-              <article class="memory-card">
-                <h4>Macro summaries</h4>
-                <ul id="memory-macro-list" class="memory-list"></ul>
-              </article>
-              <article class="memory-card">
-                <h4>Conflict ledger</h4>
-                <ul id="memory-conflict-list" class="memory-list"></ul>
-              </article>
-            </div>
-          </section>
-          <section class="insight-panel">
-            <div class="memory-inspector-topbar">
-              <h3>Insight Snapshot</h3>
-              <div class="thread-actions">
-                <button id="refresh-insights-btn" class="secondary" type="button">Refresh insights</button>
-                <button id="copy-insights-btn" class="secondary" type="button">Copy insights</button>
-              </div>
-            </div>
-            <p id="insight-status" class="memory-inspector-status">Start or restore a thread to compute insights.</p>
-            <div class="memory-inspector-grid">
-              <article class="memory-card">
-                <h4>Decisions</h4>
-                <ul id="insight-decisions-list" class="memory-list"></ul>
-              </article>
-              <article class="memory-card">
-                <h4>Open questions</h4>
-                <ul id="insight-questions-list" class="memory-list"></ul>
-              </article>
-              <article class="memory-card">
-                <h4>Next steps</h4>
-                <ul id="insight-next-steps-list" class="memory-list"></ul>
-              </article>
-            </div>
-          </section>
-          <section class="insight-panel">
-            <div class="memory-inspector-topbar">
-              <h3>Discovery Radar</h3>
-              <div class="thread-actions">
-                <button id="refresh-discoveries-btn" class="secondary" type="button">Refresh radar</button>
-                <button id="copy-discoveries-btn" class="secondary" type="button">Copy radar</button>
-              </div>
-            </div>
-            <p id="discovery-status" class="memory-inspector-status">
-              Start or restore a thread to map hypotheses and experiments.
-            </p>
-            <div class="memory-inspector-grid">
-              <article class="memory-card">
-                <h4>Hypotheses</h4>
-                <ul id="discovery-hypotheses-list" class="memory-list"></ul>
-              </article>
-              <article class="memory-card">
-                <h4>Experiments</h4>
-                <ul id="discovery-experiments-list" class="memory-list"></ul>
-              </article>
-              <article class="memory-card">
-                <h4>Risks</h4>
-                <ul id="discovery-risks-list" class="memory-list"></ul>
-              </article>
-            </div>
-          </section>
-          <section class="insight-panel">
-            <div class="memory-inspector-topbar">
-              <h3>Citation Tracker</h3>
-              <div class="thread-actions">
-                <button id="refresh-citations-btn" class="secondary" type="button">Refresh citations</button>
-                <button id="copy-citations-btn" class="secondary" type="button">Copy citations</button>
-              </div>
-            </div>
-            <p id="citation-status" class="memory-inspector-status">
-              Start or restore a debate thread to track cited claims and confidence.
-            </p>
-            <div class="memory-inspector-grid">
-              <article class="memory-card">
-                <h4>Sources</h4>
-                <ul id="citation-source-list" class="memory-list"></ul>
-              </article>
-              <article class="memory-card">
-                <h4>Cited claims</h4>
-                <ul id="citation-claim-list" class="memory-list"></ul>
-              </article>
-            </div>
-          </section>
-          <section class="insight-panel">
-            <div class="memory-inspector-topbar">
-              <h3>Discovery Lab</h3>
-              <div class="thread-actions">
-                <button id="open-best-lab-btn" class="secondary" type="button">Open best run</button>
-                <button id="adopt-best-mode-btn" class="secondary" type="button">Adopt best mode</button>
-                <button id="copy-lab-report-btn" class="secondary" type="button">Copy lab report</button>
-              </div>
-            </div>
-            <p id="lab-status" class="memory-inspector-status">
-              Run lab to compare exploration, debate, and synthesis threads.
-            </p>
-            <ul id="lab-results-list" class="memory-list"></ul>
-          </section>
-          <section class="insight-panel">
-            <div class="memory-inspector-topbar">
-              <h3>Objective Scorecard</h3>
-              <button id="refresh-score-btn" class="secondary" type="button">Refresh score</button>
-            </div>
-            <p id="score-status" class="memory-inspector-status">Start or restore a thread to score progress.</p>
-            <div class="score-track">
-              <div id="score-fill" class="score-fill"></div>
-            </div>
-            <ul id="score-components-list" class="memory-list"></ul>
-          </section>
-        </section>
       </section>
     </main>
 

@@ -4,74 +4,17 @@ Modern web app where two AI agents discuss a user topic in 10-turn batches while
 
 ## Features
 
-- Two agent personas that alternate each turn
-- Fixed 10-turn generation per run (with early-stop guardrails)
-- Persistent conversation state using SQLite
-- Compressed context memory for long threads:
-  - Stores only high-value tokens (drops filler words, articles, punctuation-only noise)
-  - Maintains weighted token memory with pruning to top tokens
-  - Creates hierarchical memory compaction tiers (micro/meso/macro summaries)
-  - Extracts structured semantic memory (decisions, constraints, definitions, open questions)
-  - Maintains a conflict ledger for contradictory durable claims
-- Coordinator guardrails:
-  - Charter-driven turn generation
-  - Moderator pass every N turns with steering directives
-  - Repetition guard and optional DONE-token stopping
-- Quality optimizer:
-  - Scores each turn for topic coverage, verbosity, and repetition
-  - Continuous evaluator loop for novelty, coherence, non-repetition, and evidence quality
-  - Auto-retries weak turns with stricter self-correction directives
-  - Exposes quality + evaluator scores and retries in stream/UI
-- Conversation Brief per thread:
-  - Objective
-  - Constraints
-  - Done criteria
-  - Brief is persisted and used by both speaker prompts and moderator checks
-- Agent Studio per thread:
-  - Customize Agent A/B name, style, and temperature
-  - Persists per conversation and is reused for stream/non-stream/fork flows
-- Thread Organizer per thread:
-  - Custom title and star/pin state
-  - Starred threads sort first in history
-  - Discovery mode (`exploration`, `debate`, `synthesis`) persisted per thread
-  - History search by topic/title in the UI
-- One-click forking from any turn to branch strategy paths without losing context
-- Conversation history sidebar with one-click thread restore
-- Live turn-by-turn streaming so agent replies appear in real time
-- Memory Inspector panel to audit high-value tokens, semantic memory items, tiered summaries, and conflict ledger entries per thread
-- Insight Snapshot panel for actionable outputs:
-  - key decisions
-  - unresolved questions
-  - concrete next steps
-- Discovery Radar panel for breakthrough loops:
-  - generated hypotheses from semantic memory
-  - experiment protocols with success/failure signals
-  - discovery risk map + novelty score
-- Citation-backed debate mode:
-  - retrieves source notes for factual threads
-  - enforces `[R#]` source-linked claims in debate turns
-  - tracks claim confidence and source coverage in Citation Tracker
-- Objective Scorecard panel:
-  - progress percentage toward completion
-  - component breakdown (coverage, decisions, done signal, resolution)
-  - one prioritized next action
-- Discovery Lab one-click experiment runner:
-  - runs `exploration`, `debate`, and `synthesis` threads in one request
-  - returns side-by-side quality + insight summaries
-  - allows fast thread switching into each lab run
-  - includes `Open best run`, `Adopt best mode`, and `Copy lab report` actions for faster follow-through
-- Productivity workflow boosts:
-  - Draft autosave/restore for topic, thread settings, brief, and agent studio inputs
-  - Keyboard shortcuts: `Cmd/Ctrl + Enter` to run, `Cmd/Ctrl + S` to save all settings
-- One-click transcript export (copy markdown or download file)
-- Sleek responsive UI with animated transcript rendering
-- Security hardening:
-  - Request rate limiting for API and generation endpoints
-  - Strict conversation id validation
-  - Optional write-token auth for state-changing API calls
-  - CSRF-style origin checks for browser write calls
-  - Security headers + CSP defaults
-- Works with OpenAI API or local fallback mode when no API key is set
+- Minimal UI with only 3 core actions: run 10-turn conversation, switch light/dark theme, restore thread history.
+- Two agent personas that alternate each turn with live streaming output.
+- Persistent conversation state in SQLite.
+- Advanced conversation engine remains available through API:
+  - high-value token memory
+  - micro/meso/macro summary compaction
+  - conflict ledger
+  - evaluator loop with automatic self-correction
+  - citation-backed debate mode with claim confidence tracking
+- Security hardening includes rate limiting, strict id validation, optional write-token auth, CSRF-style origin checks, and CSP headers.
+- Works with OpenAI API or local fallback mode when no API key is set.
 
 ## Quick start
 
