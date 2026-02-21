@@ -17,6 +17,15 @@ db.exec(`
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
 
+  CREATE TABLE IF NOT EXISTS conversation_briefs (
+    conversation_id TEXT PRIMARY KEY,
+    objective TEXT NOT NULL DEFAULT '',
+    constraints_text TEXT NOT NULL DEFAULT '',
+    done_criteria TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+  );
+
   CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     conversation_id TEXT NOT NULL,
@@ -121,12 +130,47 @@ const listConversationsStmt = db.prepare(`
     c.topic,
     c.created_at AS createdAt,
     c.updated_at AS updatedAt,
-    COALESCE(MAX(m.turn), 0) AS totalTurns
+    COALESCE(MAX(m.turn), 0) AS totalTurns,
+    CASE
+      WHEN b.objective <> '' OR b.constraints_text <> '' OR b.done_criteria <> '' THEN 1
+      ELSE 0
+    END AS hasBrief
   FROM conversations c
   LEFT JOIN messages m ON m.conversation_id = c.id
+  LEFT JOIN conversation_briefs b ON b.conversation_id = c.id
   GROUP BY c.id
   ORDER BY c.updated_at DESC
   LIMIT ?
+`);
+
+const getConversationBriefStmt = db.prepare(`
+  SELECT
+    objective,
+    constraints_text AS constraintsText,
+    done_criteria AS doneCriteria,
+    updated_at AS updatedAt
+  FROM conversation_briefs
+  WHERE conversation_id = ?
+`);
+
+const upsertConversationBriefStmt = db.prepare(`
+  INSERT INTO conversation_briefs (
+    conversation_id,
+    objective,
+    constraints_text,
+    done_criteria
+  )
+  VALUES (
+    @conversationId,
+    @objective,
+    @constraintsText,
+    @doneCriteria
+  )
+  ON CONFLICT(conversation_id) DO UPDATE SET
+    objective = excluded.objective,
+    constraints_text = excluded.constraints_text,
+    done_criteria = excluded.done_criteria,
+    updated_at = CURRENT_TIMESTAMP
 `);
 
 const upsertMemoryTokenStmt = db.prepare(`
@@ -337,7 +381,30 @@ function insertMessages(conversationId, entries) {
 
 function listConversations(limit = 20) {
   const safeLimit = Math.min(100, Math.max(1, Number(limit) || 20));
-  return listConversationsStmt.all(safeLimit);
+  return listConversationsStmt.all(safeLimit).map((row) => ({
+    ...row,
+    hasBrief: Boolean(row.hasBrief)
+  }));
+}
+
+function getConversationBrief(conversationId) {
+  return (
+    getConversationBriefStmt.get(conversationId) || {
+      objective: "",
+      constraintsText: "",
+      doneCriteria: "",
+      updatedAt: null
+    }
+  );
+}
+
+function upsertConversationBrief(conversationId, brief) {
+  upsertConversationBriefStmt.run({
+    conversationId,
+    objective: brief.objective || "",
+    constraintsText: brief.constraintsText || "",
+    doneCriteria: brief.doneCriteria || ""
+  });
 }
 
 function upsertMemoryTokens(conversationId, entries) {
@@ -408,6 +475,7 @@ export {
   createConversation,
   dbPath,
   getConversation,
+  getConversationBrief,
   getLastSummaryTurn,
   getMemoryStats,
   getMessages,
@@ -420,6 +488,7 @@ export {
   listConversations,
   pruneMemoryTokens,
   pruneSemanticItems,
+  upsertConversationBrief,
   upsertMemoryTokens,
   upsertSemanticItems
 };

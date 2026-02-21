@@ -2,9 +2,13 @@ const form = document.querySelector("#conversation-form");
 const topicInput = document.querySelector("#topic");
 const startBtn = document.querySelector("#start-btn");
 const clearBtn = document.querySelector("#clear-btn");
+const saveBriefBtn = document.querySelector("#save-brief-btn");
 const copyBtn = document.querySelector("#copy-btn");
 const downloadBtn = document.querySelector("#download-btn");
 const refreshHistoryBtn = document.querySelector("#refresh-history-btn");
+const objectiveInput = document.querySelector("#objective");
+const constraintsInput = document.querySelector("#constraints");
+const doneCriteriaInput = document.querySelector("#done-criteria");
 const transcriptEl = document.querySelector("#transcript");
 const statusEl = document.querySelector("#status");
 const engineChipEl = document.querySelector("#engine-chip");
@@ -46,6 +50,20 @@ function setConversationState(conversationId, topic) {
   activeTopic = topic;
   localStorage.setItem(CONVERSATION_ID_KEY, conversationId);
   localStorage.setItem(TOPIC_KEY, topic);
+}
+
+function getBriefPayload() {
+  return {
+    objective: objectiveInput.value.trim(),
+    constraintsText: constraintsInput.value.trim(),
+    doneCriteria: doneCriteriaInput.value.trim()
+  };
+}
+
+function setBriefFields(brief) {
+  objectiveInput.value = brief?.objective || "";
+  constraintsInput.value = brief?.constraintsText || "";
+  doneCriteriaInput.value = brief?.doneCriteria || "";
 }
 
 function clearConversationState() {
@@ -129,6 +147,9 @@ function toMarkdownTranscript() {
     `- Memory tokens: ${memoryState?.tokenCount || 0}`,
     `- Memory summaries: ${memoryState?.summaryCount || 0}`,
     `- Semantic memory items: ${memoryState?.semanticCount || 0}`,
+    `- Objective: ${objectiveInput.value.trim() || "n/a"}`,
+    `- Constraints: ${constraintsInput.value.trim() || "n/a"}`,
+    `- Done criteria: ${doneCriteriaInput.value.trim() || "n/a"}`,
     ``,
     `## Turns`,
     ``
@@ -167,6 +188,7 @@ async function loadConversation(conversationId) {
 
   topicInput.value = result.topic;
   setConversationState(result.conversationId, result.topic);
+  setBriefFields(result.brief || null);
 
   if (!result.transcript.length) {
     renderEmpty();
@@ -211,7 +233,9 @@ function renderHistory(conversations) {
 
     const meta = document.createElement("span");
     meta.className = "thread-meta";
-    meta.textContent = `${conversation.totalTurns} turns • ${formatUpdatedAt(conversation.updatedAt)}`;
+    meta.textContent = `${conversation.totalTurns} turns • ${formatUpdatedAt(conversation.updatedAt)}${
+      conversation.hasBrief ? " • brief" : ""
+    }`;
 
     button.appendChild(topic);
     button.appendChild(meta);
@@ -259,6 +283,7 @@ async function loadHistory() {
 async function restoreConversation() {
   if (!activeConversationId) {
     clearTranscript("Enter a topic to begin.");
+    setBriefFields(null);
     setMemoryChip(null);
     return;
   }
@@ -271,6 +296,7 @@ async function restoreConversation() {
     clearConversationState();
     clearTranscript("Saved conversation was not found. Start a new topic.");
     engineChipEl.textContent = "Engine: waiting";
+    setBriefFields(null);
     setMemoryChip(null);
   }
 }
@@ -283,10 +309,41 @@ refreshHistoryBtn.addEventListener("click", async () => {
 clearBtn.addEventListener("click", async () => {
   clearConversationState();
   topicInput.value = "";
+  setBriefFields(null);
   clearTranscript("Started a fresh thread.");
   engineChipEl.textContent = "Engine: waiting";
   setMemoryChip(null);
   await loadHistory();
+});
+
+saveBriefBtn.addEventListener("click", async () => {
+  const brief = getBriefPayload();
+
+  if (!activeConversationId) {
+    setStatus("Brief saved locally. Start a thread to persist it.");
+    return;
+  }
+
+  try {
+    const response = await fetch(`/api/conversation/${encodeURIComponent(activeConversationId)}/brief`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(brief)
+    });
+    const result = await response.json();
+
+    if (!response.ok) {
+      throw new Error(result.error || "Could not save brief");
+    }
+
+    setBriefFields(result.brief || null);
+    setStatus("Conversation brief saved.");
+    await loadHistory();
+  } catch (error) {
+    setStatus(error.message || "Could not save brief.");
+  }
 });
 
 copyBtn.addEventListener("click", async () => {
@@ -345,6 +402,7 @@ form.addEventListener("submit", async (event) => {
   }
 
   const conversationId = activeConversationId || undefined;
+  const brief = getBriefPayload();
 
   if (!conversationId) {
     transcriptEl.innerHTML = "";
@@ -367,7 +425,8 @@ form.addEventListener("submit", async (event) => {
       body: JSON.stringify({
         topic,
         turns: 10,
-        conversationId
+        conversationId,
+        ...brief
       })
     });
 
@@ -393,6 +452,9 @@ form.addEventListener("submit", async (event) => {
       if (chunk.type === "meta") {
         setConversationState(chunk.conversationId, chunk.topic);
         engineChipEl.textContent = `Engine: ${chunk.engine}`;
+        if (chunk.brief) {
+          setBriefFields(chunk.brief);
+        }
         setMemoryChip(chunk.memory || null);
         finalTopic = chunk.topic || finalTopic;
         return;
@@ -418,6 +480,9 @@ form.addEventListener("submit", async (event) => {
       if (chunk.type === "done") {
         totalTurns = chunk.totalTurns ?? totalTurns;
         finalTopic = chunk.topic || finalTopic;
+        if (chunk.brief) {
+          setBriefFields(chunk.brief);
+        }
         stopReason = chunk.stopReason || stopReason;
         setMemoryChip(chunk.memory || null);
         return;

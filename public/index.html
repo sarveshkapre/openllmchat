@@ -39,6 +39,35 @@
             <button id="start-btn" type="submit">Start live 10-turn dialog</button>
           </div>
         </form>
+        <section class="brief-panel">
+          <div class="brief-topbar">
+            <h2>Conversation Brief</h2>
+            <button id="save-brief-btn" class="secondary" type="button">Save brief</button>
+          </div>
+          <div class="brief-grid">
+            <label for="objective">Objective</label>
+            <textarea
+              id="objective"
+              name="objective"
+              rows="2"
+              placeholder="What should this thread accomplish?"
+            ></textarea>
+            <label for="constraints">Constraints</label>
+            <textarea
+              id="constraints"
+              name="constraints"
+              rows="2"
+              placeholder="Budget, latency, compliance, timeline, etc."
+            ></textarea>
+            <label for="done-criteria">Done criteria</label>
+            <textarea
+              id="done-criteria"
+              name="doneCriteria"
+              rows="2"
+              placeholder="How should agents decide the objective is complete?"
+            ></textarea>
+          </div>
+        </section>
         <div class="meta-row">
           <span class="chip">10 turns fixed</span>
           <span class="chip" id="engine-chip">Engine: waiting</span>

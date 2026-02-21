@@ -8,9 +8,11 @@ import {
   createConversation,
   dbPath,
   getConversation,
+  getConversationBrief,
   getMessages,
   insertMessages,
-  listConversations
+  listConversations,
+  upsertConversationBrief
 } from "./db.js";
 import {
   bootstrapMemoryIfNeeded,
@@ -123,11 +125,12 @@ function stripDonePrefix(text) {
     .trim();
 }
 
-function localTurn(topic, transcript, moderatorDirective) {
+function localTurn(topic, transcript, moderatorDirective, brief) {
   const recent = transcript.slice(-2).map((entry) => entry.text).join(" ");
   const guidance = moderatorDirective
     ? `Moderator guidance: ${moderatorDirective}.`
     : "Moderator guidance: stay on-topic and add one concrete move.";
+  const objectiveHint = brief?.objective ? `Primary objective: ${brief.objective}.` : "";
 
   const seeds = [
     `Let us stay focused on ${topic}. A practical angle is to define one core objective and test it quickly.`,
@@ -142,12 +145,12 @@ function localTurn(topic, transcript, moderatorDirective) {
     ? `I agree with the recent point: \"${recent.slice(0, 100)}...\"`
     : "Opening thought:";
 
-  return `${hook} ${guidance} ${seed}`;
+  return `${hook} ${objectiveHint} ${guidance} ${seed}`;
 }
 
-async function generateTurn({ topic, speaker, transcript, memory, moderatorDirective }) {
+async function generateTurn({ topic, speaker, transcript, memory, moderatorDirective, brief }) {
   if (!client) {
-    return localTurn(topic, transcript, moderatorDirective);
+    return localTurn(topic, transcript, moderatorDirective, brief);
   }
 
   const prompt = buildContextBlock({
@@ -155,7 +158,8 @@ async function generateTurn({ topic, speaker, transcript, memory, moderatorDirec
     transcript,
     memory,
     moderatorDirective,
-    charter: DISCUSSION_CHARTER
+    charter: DISCUSSION_CHARTER,
+    brief
   });
 
   const completion = await client.chat.completions.create({
@@ -178,12 +182,56 @@ async function generateTurn({ topic, speaker, transcript, memory, moderatorDirec
     ]
   });
 
-  return completion.choices?.[0]?.message?.content?.trim() || localTurn(topic, transcript, moderatorDirective);
+  return (
+    completion.choices?.[0]?.message?.content?.trim() ||
+    localTurn(topic, transcript, moderatorDirective, brief)
+  );
 }
 
 function parseTurns(rawTurns) {
   const requestedTurns = Number(rawTurns ?? 10);
   return Math.min(10, Math.max(2, Number.isFinite(requestedTurns) ? requestedTurns : 10));
+}
+
+function sanitizeBriefField(value, maxLen = 800) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxLen);
+}
+
+function parseBriefFromBody(body) {
+  return {
+    objective: sanitizeBriefField(body?.objective, 280),
+    constraintsText: sanitizeBriefField(body?.constraintsText ?? body?.constraints, 500),
+    doneCriteria: sanitizeBriefField(body?.doneCriteria, 320)
+  };
+}
+
+function hasBriefPayload(body) {
+  if (!body || typeof body !== "object") {
+    return false;
+  }
+
+  return ["objective", "constraintsText", "constraints", "doneCriteria"].some((key) =>
+    Object.prototype.hasOwnProperty.call(body, key)
+  );
+}
+
+function mergeBriefPatch(currentBrief, body, parsedBrief) {
+  return {
+    objective: Object.prototype.hasOwnProperty.call(body, "objective")
+      ? parsedBrief.objective
+      : currentBrief.objective,
+    constraintsText:
+      Object.prototype.hasOwnProperty.call(body, "constraintsText") ||
+      Object.prototype.hasOwnProperty.call(body, "constraints")
+        ? parsedBrief.constraintsText
+        : currentBrief.constraintsText,
+    doneCriteria: Object.prototype.hasOwnProperty.call(body, "doneCriteria")
+      ? parsedBrief.doneCriteria
+      : currentBrief.doneCriteria
+  };
 }
 
 function parseJsonObject(text) {
@@ -207,13 +255,16 @@ function parseJsonObject(text) {
   }
 }
 
-function localModeratorAssessment({ topic, transcript }) {
+function localModeratorAssessment({ topic, transcript, brief }) {
   const last = transcript[transcript.length - 1];
   const prev = transcript[transcript.length - 2];
 
   const repetitive = Boolean(prev && jaccardSimilarity(last?.text, prev?.text) > 0.88);
   const tooShort = (normalizeText(last?.text).split(" ").filter(Boolean).length || 0) < 8;
   const onTopic = normalizeText(last?.text).includes(normalizeText(topic).split(" ")[0] || "");
+  const done = brief?.doneCriteria
+    ? jaccardSimilarity(brief.doneCriteria, last?.text || "") >= 0.42
+    : false;
 
   let directive = "Increase specificity with one concrete actionable point.";
   if (!onTopic) {
@@ -228,12 +279,12 @@ function localModeratorAssessment({ topic, transcript }) {
     onTopic,
     repetitive,
     tooShort,
-    done: false,
+    done,
     directive
   };
 }
 
-async function runModerator({ topic, transcript, memory, currentDirective }) {
+async function runModerator({ topic, transcript, memory, currentDirective, brief }) {
   if (transcript.length < 2) {
     return {
       onTopic: true,
@@ -245,7 +296,7 @@ async function runModerator({ topic, transcript, memory, currentDirective }) {
   }
 
   if (!client) {
-    return localModeratorAssessment({ topic, transcript });
+    return localModeratorAssessment({ topic, transcript, brief });
   }
 
   const recent = transcript
@@ -271,6 +322,9 @@ async function runModerator({ topic, transcript, memory, currentDirective }) {
         role: "user",
         content: [
           `Topic: ${topic}`,
+          `Objective: ${brief?.objective || "(none)"}`,
+          `Constraints: ${brief?.constraintsText || "(none)"}`,
+          `Done criteria: ${brief?.doneCriteria || "(none)"}`,
           `Current directive: ${currentDirective || "(none)"}`,
           `Memory tokens: ${memoryTokens || "(none)"}`,
           "Recent conversation:",
@@ -290,7 +344,7 @@ async function runModerator({ topic, transcript, memory, currentDirective }) {
   const parsed = parseJsonObject(raw);
 
   if (!parsed || typeof parsed !== "object") {
-    return localModeratorAssessment({ topic, transcript });
+    return localModeratorAssessment({ topic, transcript, brief });
   }
 
   return {
@@ -306,6 +360,8 @@ async function resolveConversation(body) {
   const turns = parseTurns(body?.turns);
   const requestedTopic = String(body?.topic || "").trim();
   const requestedConversationId = String(body?.conversationId || "").trim();
+  const requestedBrief = parseBriefFromBody(body);
+  const shouldUpdateBrief = hasBriefPayload(body);
 
   let conversation = null;
   if (requestedConversationId) {
@@ -331,6 +387,13 @@ async function resolveConversation(body) {
     createConversation(conversationId, topic);
   }
 
+  const existingBrief = getConversationBrief(conversationId);
+  if (shouldUpdateBrief) {
+    upsertConversationBrief(conversationId, mergeBriefPatch(existingBrief, body, requestedBrief));
+  }
+
+  const brief = getConversationBrief(conversationId);
+
   const transcript = getMessages(conversationId);
   await bootstrapMemoryIfNeeded({
     conversationId,
@@ -345,6 +408,7 @@ async function resolveConversation(body) {
   return {
     conversationId,
     topic,
+    brief,
     transcript,
     turns,
     memory
@@ -370,6 +434,7 @@ async function finalizeMemory(conversationId, topic, newEntries, totalTurns) {
 async function runConversationBatch({
   conversationId,
   topic,
+  brief,
   transcript,
   turns,
   memory,
@@ -377,7 +442,9 @@ async function runConversationBatch({
 }) {
   const newEntries = [];
   const startedAt = Date.now();
-  let moderatorDirective = "Maintain topic depth and avoid repetition.";
+  let moderatorDirective = brief?.objective
+    ? `Prioritize this objective: ${brief.objective}`
+    : "Maintain topic depth and avoid repetition.";
   let stopReason = "max_turns";
   let repetitionStreak = 0;
 
@@ -394,7 +461,8 @@ async function runConversationBatch({
       speaker,
       transcript,
       memory,
-      moderatorDirective
+      moderatorDirective,
+      brief
     });
 
     const signaledDone = containsDoneToken(generated);
@@ -440,6 +508,7 @@ async function runConversationBatch({
     if (shouldModerate) {
       const moderation = await runModerator({
         topic,
+        brief,
         transcript,
         memory,
         currentDirective: moderatorDirective
@@ -483,13 +552,56 @@ app.get("/api/conversation/:id", (req, res) => {
 
   const transcript = getMessages(conversationId);
   const memory = getCompressedMemory(conversationId);
+  const brief = getConversationBrief(conversationId);
 
   return res.json({
     conversationId,
     topic: conversation.topic,
+    brief,
     totalTurns: transcript.length,
     transcript,
     memory: memory.stats
+  });
+});
+
+app.get("/api/conversation/:id/brief", (req, res) => {
+  const conversationId = String(req.params.id || "").trim();
+  if (!conversationId) {
+    return res.status(400).json({ error: "Conversation id is required." });
+  }
+
+  const conversation = getConversation(conversationId);
+  if (!conversation) {
+    return res.status(404).json({ error: "Conversation not found." });
+  }
+
+  return res.json({
+    conversationId,
+    topic: conversation.topic,
+    brief: getConversationBrief(conversationId)
+  });
+});
+
+app.post("/api/conversation/:id/brief", (req, res) => {
+  const conversationId = String(req.params.id || "").trim();
+  if (!conversationId) {
+    return res.status(400).json({ error: "Conversation id is required." });
+  }
+
+  const conversation = getConversation(conversationId);
+  if (!conversation) {
+    return res.status(404).json({ error: "Conversation not found." });
+  }
+
+  const currentBrief = getConversationBrief(conversationId);
+  const parsedBrief = parseBriefFromBody(req.body);
+  const mergedBrief = mergeBriefPatch(currentBrief, req.body || {}, parsedBrief);
+  upsertConversationBrief(conversationId, mergedBrief);
+
+  return res.json({
+    conversationId,
+    topic: conversation.topic,
+    brief: getConversationBrief(conversationId)
   });
 });
 
@@ -505,9 +617,11 @@ app.get("/api/conversation/:id/memory", (req, res) => {
   }
 
   const memory = getCompressedMemory(conversationId);
+  const brief = getConversationBrief(conversationId);
   return res.json({
     conversationId,
     topic: conversation.topic,
+    brief,
     memory
   });
 });
@@ -526,7 +640,7 @@ app.post("/api/conversation/stream", async (req, res) => {
       return res.status(setup.status).json({ error: setup.error });
     }
 
-    const { conversationId, topic, transcript, turns, memory } = setup;
+    const { conversationId, topic, brief, transcript, turns, memory } = setup;
 
     res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
     res.setHeader("Cache-Control", "no-cache");
@@ -543,6 +657,7 @@ app.post("/api/conversation/stream", async (req, res) => {
       type: "meta",
       conversationId,
       topic,
+      brief,
       engine: getEngineLabel(),
       memory: memory.stats,
       charter: DISCUSSION_CHARTER,
@@ -556,6 +671,7 @@ app.post("/api/conversation/stream", async (req, res) => {
     const batch = await runConversationBatch({
       conversationId,
       topic,
+      brief,
       transcript,
       turns,
       memory,
@@ -566,6 +682,7 @@ app.post("/api/conversation/stream", async (req, res) => {
       type: "done",
       conversationId,
       topic,
+      brief,
       turns: batch.newEntries.length,
       totalTurns: batch.totalTurns,
       stopReason: batch.stopReason,
@@ -590,10 +707,11 @@ app.post("/api/conversation", async (req, res) => {
       return res.status(setup.status).json({ error: setup.error });
     }
 
-    const { conversationId, topic, transcript, turns, memory } = setup;
+    const { conversationId, topic, brief, transcript, turns, memory } = setup;
     const batch = await runConversationBatch({
       conversationId,
       topic,
+      brief,
       transcript,
       turns,
       memory
@@ -602,6 +720,7 @@ app.post("/api/conversation", async (req, res) => {
     return res.json({
       conversationId,
       topic,
+      brief,
       turns: batch.newEntries.length,
       totalTurns: batch.totalTurns,
       stopReason: batch.stopReason,

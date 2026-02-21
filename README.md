@@ -16,6 +16,11 @@ Modern web app where two AI agents discuss a user topic in 10-turn batches while
   - Charter-driven turn generation
   - Moderator pass every N turns with steering directives
   - Repetition guard and optional DONE-token stopping
+- Conversation Brief per thread:
+  - Objective
+  - Constraints
+  - Done criteria
+  - Brief is persisted and used by both speaker prompts and moderator checks
 - Conversation history sidebar with one-click thread restore
 - Live turn-by-turn streaming so agent replies appear in real time
 - One-click transcript export (copy markdown or download file)
@@ -62,24 +67,35 @@ Request body:
 {
   "topic": "Designing a context-aware AI onboarding flow",
   "turns": 10,
-  "conversationId": "optional-existing-conversation-id"
+  "conversationId": "optional-existing-conversation-id",
+  "objective": "Produce a concrete architecture recommendation",
+  "constraintsText": "Low latency, auditability, and minimal cost",
+  "doneCriteria": "Both agents align on one plan with tradeoffs and next steps"
 }
 ```
 
-Response includes generated turns, total turns, memory stats, and stop reason.
+Response includes generated turns, total turns, memory stats, brief, and stop reason.
 
 ### `POST /api/conversation/stream`
 
 Same behavior as `POST /api/conversation`, but returns newline-delimited JSON chunks for live UI updates:
 
-- `meta`: conversation info, engine, memory stats, charter, guardrails
+- `meta`: conversation info, engine, memory stats, brief, charter, guardrails
 - `turn`: one generated turn plus quality stats
 - `moderator`: moderator assessment/directive
-- `done`: final summary with stop reason and updated memory stats
+- `done`: final summary with stop reason, brief, and updated memory stats
 
 ### `GET /api/conversation/:id`
 
-Returns a saved conversation transcript, topic, and memory stats.
+Returns a saved conversation transcript, topic, brief, and memory stats.
+
+### `GET /api/conversation/:id/brief`
+
+Returns only the persisted brief for a conversation.
+
+### `POST /api/conversation/:id/brief`
+
+Updates brief fields for an existing conversation.
 
 ### `GET /api/conversation/:id/memory`
 
@@ -92,4 +108,4 @@ Returns compressed memory details for a conversation:
 
 ### `GET /api/conversations?limit=30`
 
-Returns recent conversation threads with topic, updated time, and turn count for history UIs.
+Returns recent conversation threads with topic, updated time, turn count, and `hasBrief` flag for history UIs.

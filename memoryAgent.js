@@ -506,7 +506,7 @@ function formatSemanticLines(items) {
     .join("\n");
 }
 
-function buildContextBlock({ topic, transcript, memory, moderatorDirective, charter }) {
+function buildContextBlock({ topic, transcript, memory, moderatorDirective, charter, brief }) {
   const recentTurns = transcript.slice(-10);
   const tokenLine = (memory.tokens || []).map((item) => item.token).join(", ");
   const summaries = memory.summaries || [];
@@ -528,8 +528,16 @@ function buildContextBlock({ topic, transcript, memory, moderatorDirective, char
     .map((line, idx) => `${idx + 1}) ${line}`)
     .join("\n");
 
+  const objective = brief?.objective || "(no explicit objective)";
+  const constraints = brief?.constraintsText || "(no explicit constraints)";
+  const doneCriteria = brief?.doneCriteria || "(no explicit done criteria)";
+
   return [
     `Topic: ${topic}`,
+    "Conversation brief:",
+    `Objective: ${objective}`,
+    `Constraints: ${constraints}`,
+    `Done criteria: ${doneCriteria}`,
     "Discussion charter:",
     charterBlock,
     tokenLine ? `High-value memory tokens: ${tokenLine}` : "High-value memory tokens: (none yet)",
