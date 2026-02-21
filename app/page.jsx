@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Moon, PanelLeft, PanelLeftClose, Plus, RefreshCcw, Sun, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -187,8 +187,33 @@ export default function HomePage() {
   const [activeConversationId, setActiveConversationId] = useState("");
   const [activeTopic, setActiveTopic] = useState("");
 
+  const scrollRef = useRef(null);
+  const abortRef = useRef(null);
+  const scrollScheduledRef = useRef(false);
+
+  const [autoScrollEnabled, setAutoScrollEnabled] = useState(true);
+  const [showJumpToBottom, setShowJumpToBottom] = useState(false);
+
   const agentAPreset = useMemo(() => getPersonaPreset(agentAPersona, "atlas"), [agentAPersona]);
   const agentBPreset = useMemo(() => getPersonaPreset(agentBPersona, "nova"), [agentBPersona]);
+
+  const scheduleScrollToBottom = useCallback(() => {
+    if (!autoScrollEnabled) {
+      return;
+    }
+    if (scrollScheduledRef.current) {
+      return;
+    }
+    scrollScheduledRef.current = true;
+    requestAnimationFrame(() => {
+      scrollScheduledRef.current = false;
+      const el = scrollRef.current;
+      if (!el) {
+        return;
+      }
+      el.scrollTop = el.scrollHeight;
+    });
+  }, [autoScrollEnabled]);
 
   const applyTheme = useCallback((nextTheme) => {
     const resolved = nextTheme === "dark" ? "dark" : "light";
@@ -308,12 +333,36 @@ export default function HomePage() {
   }, [historyOpen]);
 
   useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) {
+      return undefined;
+    }
+
+    const onScroll = () => {
+      const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+      const nearBottom = distanceToBottom <= 140;
+      setAutoScrollEnabled(nearBottom);
+      setShowJumpToBottom(!nearBottom && messages.length > 0);
+    };
+
+    onScroll();
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, [messages.length]);
+
+  useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.agentAPersona, agentAPersona);
   }, [agentAPersona]);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.agentBPersona, agentBPersona);
   }, [agentBPersona]);
+
+  const stopConversation = useCallback(() => {
+    if (abortRef.current) {
+      abortRef.current.abort();
+    }
+  }, []);
 
   const runConversation = useCallback(async () => {
     const cleanTopic = topic.trim();
@@ -340,9 +389,11 @@ export default function HomePage() {
     setStatus(conversationId ? `Continuing for ${turns} turns...` : `Running ${turns} turns...`);
 
     try {
+      abortRef.current = new AbortController();
       const response = await fetch("/api/conversation/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: abortRef.current.signal,
         body: JSON.stringify({
           topic: cleanTopic,
           turns,
@@ -410,6 +461,7 @@ export default function HomePage() {
             text: ""
           };
           setMessages((previous) => upsertMessageByTurn(previous, provisional));
+          scheduleScrollToBottom();
           const nextTotal = Number(chunk.totalTurns || finalTotalTurns);
           finalTotalTurns = nextTotal;
           setTotalTurns(nextTotal);
@@ -424,6 +476,7 @@ export default function HomePage() {
             text: String(chunk.text || "")
           };
           setMessages((previous) => upsertMessageByTurn(previous, partial));
+          scheduleScrollToBottom();
           const nextTotal = Number(chunk.totalTurns || finalTotalTurns);
           finalTotalTurns = nextTotal;
           setTotalTurns(nextTotal);
@@ -437,6 +490,7 @@ export default function HomePage() {
             generatedTurns += 1;
           }
           setMessages((previous) => upsertMessageByTurn(previous, chunk.entry));
+          scheduleScrollToBottom();
           const nextTotal = Number(chunk.totalTurns || finalTotalTurns + 1);
           finalTotalTurns = nextTotal;
           setTotalTurns(nextTotal);
@@ -477,9 +531,14 @@ export default function HomePage() {
       setStatus(`Added ${generatedTurns} turns. Total: ${finalTotalTurns}.${stopMessage}`);
       await loadHistory();
     } catch (error) {
-      setStatus(error?.message || "Could not generate conversation.");
+      if (error?.name === "AbortError") {
+        setStatus("Stopped.");
+      } else {
+        setStatus(error?.message || "Could not generate conversation.");
+      }
     } finally {
       setIsRunning(false);
+      abortRef.current = null;
     }
   }, [
     activeConversationId,
@@ -488,6 +547,7 @@ export default function HomePage() {
     agentBPreset,
     clearThreadState,
     loadHistory,
+    scheduleScrollToBottom,
     topic,
     totalTurns,
     turnsInput
@@ -676,7 +736,7 @@ export default function HomePage() {
             </div>
           </header>
 
-          <div className="thread-scroll min-h-0 flex-1 overflow-y-auto">
+          <div ref={scrollRef} className="thread-scroll relative min-h-0 flex-1 overflow-y-auto">
             <div className="mx-auto w-full max-w-4xl px-4 py-6 md:px-8">
               {messages.length === 0 ? (
                 <div className="mx-auto mt-16 max-w-2xl text-center">
@@ -700,9 +760,9 @@ export default function HomePage() {
                           </p>
                           <div
                             className={cn(
-                              "rounded-2xl px-4 py-3 text-sm leading-7",
+                              "rounded-2xl px-4 py-3 text-[15px] leading-7 tracking-[-0.01em]",
                               isLeft
-                                ? "border bg-card text-card-foreground"
+                                ? "border bg-card text-card-foreground shadow-sm"
                                 : "bg-primary text-primary-foreground shadow-sm"
                             )}
                           >
@@ -715,6 +775,24 @@ export default function HomePage() {
                 </ul>
               )}
             </div>
+
+            {showJumpToBottom ? (
+              <div className="pointer-events-none sticky bottom-4 flex justify-center px-4">
+                <div className="pointer-events-auto">
+                  <Button
+                    variant="secondary"
+                    className="rounded-full shadow-sm"
+                    onClick={() => {
+                      setAutoScrollEnabled(true);
+                      setShowJumpToBottom(false);
+                      scheduleScrollToBottom();
+                    }}
+                  >
+                    Jump to bottom
+                  </Button>
+                </div>
+              </div>
+            ) : null}
           </div>
 
           <footer className="border-t bg-background/95 px-3 py-3 md:px-6">
@@ -727,24 +805,16 @@ export default function HomePage() {
                 }
               }}
             >
-              <Input
+              <textarea
                 value={topic}
                 onChange={(event) => setTopic(event.target.value)}
                 placeholder="Topic"
                 maxLength={180}
                 aria-label="Conversation topic"
-                className="border-0 bg-transparent px-2 shadow-none focus-visible:ring-0"
+                rows={1}
+                className="max-h-24 w-full resize-none rounded-md border-0 bg-transparent px-2 py-2 text-[15px] leading-6 shadow-none outline-none"
               />
               <div className="mt-2 flex flex-wrap items-center gap-2 border-t pt-2">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  aria-label="Run conversation"
-                  type="submit"
-                  disabled={isRunning}
-                >
-                  <Plus className="size-4" />
-                </Button>
                 <Input
                   type="number"
                   min={2}
@@ -779,12 +849,17 @@ export default function HomePage() {
                   ))}
                 </select>
                 <div className="ml-auto flex items-center gap-2">
-                  <p className="max-w-[340px] truncate text-xs text-muted-foreground">{status}</p>
-                  <Button type="submit" disabled={isRunning}>
-                    {isRunning ? "Running..." : "Start"}
-                  </Button>
+                  <p className="hidden max-w-[420px] truncate text-xs text-muted-foreground md:block">{status}</p>
+                  {isRunning ? (
+                    <Button type="button" variant="secondary" onClick={stopConversation}>
+                      Stop
+                    </Button>
+                  ) : (
+                    <Button type="submit">Start</Button>
+                  )}
                 </div>
               </div>
+              <p className="mt-2 text-xs text-muted-foreground md:hidden">{status}</p>
             </form>
           </footer>
         </section>
