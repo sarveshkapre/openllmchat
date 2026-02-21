@@ -10,8 +10,9 @@ Modern web app where two AI agents discuss a user topic in 10-turn batches while
 - Compressed context memory for long threads:
   - Stores only high-value tokens (drops filler words, articles, punctuation-only noise)
   - Maintains weighted token memory with pruning to top tokens
-  - Creates rolling summary snapshots after configurable turn windows
+  - Creates hierarchical memory compaction tiers (micro/meso/macro summaries)
   - Extracts structured semantic memory (decisions, constraints, definitions, open questions)
+  - Maintains a conflict ledger for contradictory durable claims
 - Coordinator guardrails:
   - Charter-driven turn generation
   - Moderator pass every N turns with steering directives
@@ -37,7 +38,7 @@ Modern web app where two AI agents discuss a user topic in 10-turn batches while
 - One-click forking from any turn to branch strategy paths without losing context
 - Conversation history sidebar with one-click thread restore
 - Live turn-by-turn streaming so agent replies appear in real time
-- Memory Inspector panel to audit high-value tokens, semantic memory items, and rolling summaries per thread
+- Memory Inspector panel to audit high-value tokens, semantic memory items, tiered summaries, and conflict ledger entries per thread
 - Insight Snapshot panel for actionable outputs:
   - key decisions
   - unresolved questions
@@ -95,6 +96,12 @@ Open `http://localhost:3000`.
 - `MEMORY_SUMMARY_LIMIT`: number of latest summaries injected into prompts (default `6`)
 - `MEMORY_SEMANTIC_KEEP_LIMIT`: max semantic records stored per conversation (default `240`)
 - `MEMORY_PROMPT_SEMANTIC_LIMIT`: semantic records injected into prompt context (default `24`)
+- `MEMORY_MESO_GROUP_SIZE`: number of micro summaries merged into one meso summary (default `4`)
+- `MEMORY_MACRO_GROUP_SIZE`: number of meso summaries merged into one macro summary (default `3`)
+- `MEMORY_PROMPT_MESO_LIMIT`: meso summaries injected into context (default `4`)
+- `MEMORY_PROMPT_MACRO_LIMIT`: macro summaries injected into context (default `3`)
+- `MEMORY_CONFLICT_KEEP_LIMIT`: max stored conflict ledger records per conversation (default `160`)
+- `MEMORY_PROMPT_CONFLICT_LIMIT`: conflict ledger records injected into context (default `14`)
 - `MODERATOR_INTERVAL`: run moderator every N total turns (default `6`)
 - `MAX_GENERATION_MS`: hard per-request generation time budget (default `30000`)
 - `MAX_REPETITION_STREAK`: allowed near-duplicate turn streak before stop (default `2`)
@@ -239,8 +246,11 @@ Returns the new `conversationId`, fork title, inherited brief, inherited agents,
 Returns compressed memory details for a conversation:
 
 - weighted high-value tokens
-- rolling summaries
+- micro summaries
+- meso summaries
+- macro summaries
 - structured semantic memory records
+- conflict ledger entries
 - memory stats
 - active agent configuration
 

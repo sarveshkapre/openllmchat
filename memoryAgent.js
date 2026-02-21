@@ -1,13 +1,18 @@
 import {
+  getConflictLedger,
   getLastSummaryTurn,
   getMemoryStats,
   getMessagesInRange,
   getRecentSummaries,
+  getRecentTierSummaries,
   getTopMemoryTokens,
   getTopSemanticItems,
+  insertTierSummary,
   insertSummary,
+  pruneConflictLedger,
   pruneMemoryTokens,
   pruneSemanticItems,
+  upsertConflictLedger,
   upsertMemoryTokens,
   upsertSemanticItems
 } from "./db.js";
@@ -128,6 +133,12 @@ const MEMORY_SUMMARY_WINDOW_TURNS = readIntEnv("MEMORY_SUMMARY_WINDOW_TURNS", 40
 const MEMORY_MIN_TURNS_FOR_SUMMARY = readIntEnv("MEMORY_MIN_TURNS_FOR_SUMMARY", 40, 10, 400);
 const MEMORY_SEMANTIC_KEEP_LIMIT = readIntEnv("MEMORY_SEMANTIC_KEEP_LIMIT", 240, 50, 800);
 const MEMORY_PROMPT_SEMANTIC_LIMIT = readIntEnv("MEMORY_PROMPT_SEMANTIC_LIMIT", 24, 8, 120);
+const MEMORY_MESO_GROUP_SIZE = readIntEnv("MEMORY_MESO_GROUP_SIZE", 4, 2, 12);
+const MEMORY_MACRO_GROUP_SIZE = readIntEnv("MEMORY_MACRO_GROUP_SIZE", 3, 2, 10);
+const MEMORY_PROMPT_MESO_LIMIT = readIntEnv("MEMORY_PROMPT_MESO_LIMIT", 4, 1, 12);
+const MEMORY_PROMPT_MACRO_LIMIT = readIntEnv("MEMORY_PROMPT_MACRO_LIMIT", 3, 1, 8);
+const MEMORY_CONFLICT_KEEP_LIMIT = readIntEnv("MEMORY_CONFLICT_KEEP_LIMIT", 160, 30, 600);
+const MEMORY_PROMPT_CONFLICT_LIMIT = readIntEnv("MEMORY_PROMPT_CONFLICT_LIMIT", 14, 3, 80);
 
 const TOKEN_PATTERN = /[a-z0-9][a-z0-9'-]*/gi;
 
@@ -383,6 +394,227 @@ async function summarizeChunk({ topic, messages, client, model }) {
   }
 }
 
+function compactLine(text, maxLen = 240) {
+  return String(text || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxLen);
+}
+
+function localTierSummary(topic, tier, summaries) {
+  const labels = summaries.map((item) => `turns ${item.startTurn}-${item.endTurn}`).join(", ");
+  const condensed = summaries
+    .map((item) => compactLine(item.summary, 120))
+    .filter(Boolean)
+    .slice(0, 4)
+    .join(" | ");
+
+  return compactLine(
+    `${tier.toUpperCase()} memory for ${topic}. Covers ${labels}. Key durable context: ${condensed}`,
+    800
+  );
+}
+
+function summarizeTierInput(summaries) {
+  return summaries
+    .map((item, index) => `S${index + 1} (${item.startTurn}-${item.endTurn}): ${item.summary}`)
+    .join("\n");
+}
+
+async function summarizeTierChunk({ topic, tier, summaries, client, model }) {
+  if (!summaries.length) {
+    return "";
+  }
+
+  if (!client) {
+    return localTierSummary(topic, tier, summaries);
+  }
+
+  try {
+    const completion = await client.chat.completions.create({
+      model,
+      temperature: 0.12,
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are Memory Compactor. Merge summaries into a durable, high-signal context block. Keep decisions, constraints, conflicts, unresolved questions, and critical definitions."
+        },
+        {
+          role: "user",
+          content: [
+            `Topic: ${topic}`,
+            `Target tier: ${tier}`,
+            "Summaries to merge:",
+            summarizeTierInput(summaries),
+            "Output requirements:",
+            "- <= 130 words",
+            "- dense, compact plain text",
+            "- keep only durable context"
+          ].join("\n")
+        }
+      ]
+    });
+
+    return completion.choices?.[0]?.message?.content?.trim() || localTierSummary(topic, tier, summaries);
+  } catch {
+    return localTierSummary(topic, tier, summaries);
+  }
+}
+
+function newestEndTurn(items) {
+  if (!items.length) {
+    return 0;
+  }
+  return Number(items[items.length - 1]?.endTurn || 0);
+}
+
+async function maybeCreateTierCompactions({ conversationId, topic, client, model }) {
+  const microSummaries = getRecentSummaries(conversationId, 30);
+  if (microSummaries.length < MEMORY_MESO_GROUP_SIZE) {
+    return;
+  }
+
+  let mesoSummaries = getRecentTierSummaries(conversationId, "meso", 80);
+  let mesoLastEnd = newestEndTurn(mesoSummaries);
+  let pendingMicro = microSummaries.filter((item) => Number(item.endTurn || 0) > mesoLastEnd);
+
+  while (pendingMicro.length >= MEMORY_MESO_GROUP_SIZE) {
+    const group = pendingMicro.slice(0, MEMORY_MESO_GROUP_SIZE);
+    const summary = await summarizeTierChunk({
+      topic,
+      tier: "meso",
+      summaries: group,
+      client,
+      model
+    });
+    insertTierSummary(
+      conversationId,
+      "meso",
+      Number(group[0]?.startTurn || 0),
+      Number(group[group.length - 1]?.endTurn || 0),
+      summary
+    );
+    mesoLastEnd = Number(group[group.length - 1]?.endTurn || mesoLastEnd);
+    pendingMicro = pendingMicro.filter((item) => Number(item.endTurn || 0) > mesoLastEnd);
+  }
+
+  mesoSummaries = getRecentTierSummaries(conversationId, "meso", 80);
+  if (mesoSummaries.length < MEMORY_MACRO_GROUP_SIZE) {
+    return;
+  }
+
+  const macroSummaries = getRecentTierSummaries(conversationId, "macro", 80);
+  let macroLastEnd = newestEndTurn(macroSummaries);
+  let pendingMeso = mesoSummaries.filter((item) => Number(item.endTurn || 0) > macroLastEnd);
+
+  while (pendingMeso.length >= MEMORY_MACRO_GROUP_SIZE) {
+    const group = pendingMeso.slice(0, MEMORY_MACRO_GROUP_SIZE);
+    const summary = await summarizeTierChunk({
+      topic,
+      tier: "macro",
+      summaries: group,
+      client,
+      model
+    });
+    insertTierSummary(
+      conversationId,
+      "macro",
+      Number(group[0]?.startTurn || 0),
+      Number(group[group.length - 1]?.endTurn || 0),
+      summary
+    );
+    macroLastEnd = Number(group[group.length - 1]?.endTurn || macroLastEnd);
+    pendingMeso = pendingMeso.filter((item) => Number(item.endTurn || 0) > macroLastEnd);
+  }
+}
+
+function tokenizeForConflict(text) {
+  return normalizeCanonicalText(text, 220)
+    .split(" ")
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 4 && !STOP_WORDS.has(token));
+}
+
+function containsNegation(text) {
+  return /\b(not|never|cannot|can't|without|avoid|against|reject)\b/.test(
+    String(text || "").toLowerCase()
+  );
+}
+
+function detectConflictEntries(semanticItems) {
+  const candidates = (semanticItems || [])
+    .filter((item) => ["decision", "constraint", "definition"].includes(item.itemType))
+    .slice(0, 70);
+  const conflicts = [];
+
+  for (let i = 0; i < candidates.length; i += 1) {
+    for (let j = i + 1; j < candidates.length; j += 1) {
+      const a = candidates[i];
+      const b = candidates[j];
+      const tokensA = tokenizeForConflict(a.canonicalText || a.evidenceText);
+      const tokensB = tokenizeForConflict(b.canonicalText || b.evidenceText);
+      if (tokensA.length === 0 || tokensB.length === 0) {
+        continue;
+      }
+
+      const setB = new Set(tokensB);
+      const shared = tokensA.filter((token) => setB.has(token));
+      if (shared.length < 3) {
+        continue;
+      }
+
+      const negationMismatch =
+        containsNegation(a.evidenceText || a.canonicalText) !== containsNegation(b.evidenceText || b.canonicalText);
+      if (!negationMismatch) {
+        continue;
+      }
+
+      const issueKey = `${a.itemType}|${b.itemType}|${shared.slice(0, 6).join("-")}`.slice(0, 220);
+      const confidence = Math.min(
+        0.96,
+        0.46 + shared.length * 0.07 + Math.max(Number(a.confidence || 0), Number(b.confidence || 0)) * 0.2
+      );
+      conflicts.push({
+        issueKey,
+        itemA: compactLine(a.evidenceText || a.canonicalText, 220),
+        itemB: compactLine(b.evidenceText || b.canonicalText, 220),
+        confidence: Number(confidence.toFixed(4)),
+        status: "open",
+        firstTurn: Math.min(Number(a.firstTurn || 0), Number(b.firstTurn || 0)),
+        lastTurn: Math.max(Number(a.lastTurn || 0), Number(b.lastTurn || 0)),
+        occurrences: 1
+      });
+    }
+  }
+
+  const dedup = new Map();
+  for (const conflict of conflicts) {
+    if (!dedup.has(conflict.issueKey)) {
+      dedup.set(conflict.issueKey, conflict);
+      continue;
+    }
+
+    const existing = dedup.get(conflict.issueKey);
+    existing.confidence = Math.max(existing.confidence, conflict.confidence);
+    existing.lastTurn = Math.max(existing.lastTurn, conflict.lastTurn);
+    existing.occurrences += 1;
+  }
+
+  return [...dedup.values()]
+    .sort((a, b) => b.confidence - a.confidence || b.lastTurn - a.lastTurn)
+    .slice(0, 80);
+}
+
+function updateConflictLedger(conversationId) {
+  const semantic = getTopSemanticItems(conversationId, Math.min(MEMORY_SEMANTIC_KEEP_LIMIT, 80));
+  const conflicts = detectConflictEntries(semantic);
+  if (conflicts.length > 0) {
+    upsertConflictLedger(conversationId, conflicts);
+  }
+  pruneConflictLedger(conversationId, MEMORY_CONFLICT_KEEP_LIMIT);
+}
+
 function updateHighValueTokens(conversationId, entries) {
   const tokenEntries = collapseTokenEntries(
     entries.flatMap((entry) => extractTokenEntries(entry.text, entry.turn))
@@ -398,12 +630,12 @@ function updateHighValueTokens(conversationId, entries) {
 
 function updateSemanticMemory(conversationId, entries) {
   const semanticEntries = extractSemanticEntries(entries);
-  if (!semanticEntries.length) {
-    return;
+  if (semanticEntries.length) {
+    upsertSemanticItems(conversationId, semanticEntries);
+    pruneSemanticItems(conversationId, MEMORY_SEMANTIC_KEEP_LIMIT);
   }
 
-  upsertSemanticItems(conversationId, semanticEntries);
-  pruneSemanticItems(conversationId, MEMORY_SEMANTIC_KEEP_LIMIT);
+  updateConflictLedger(conversationId);
 }
 
 async function maybeCreateSummaries({ conversationId, topic, totalTurns, client, model }) {
@@ -444,10 +676,20 @@ async function bootstrapMemoryIfNeeded({ conversationId, topic, transcript, clie
     updateSemanticMemory(conversationId, transcript);
   }
 
+  if (stats.conflictCount === 0 && transcript.length > 0) {
+    updateConflictLedger(conversationId);
+  }
+
   await maybeCreateSummaries({
     conversationId,
     topic,
     totalTurns: transcript.length,
+    client,
+    model
+  });
+  await maybeCreateTierCompactions({
+    conversationId,
+    topic,
     client,
     model
   });
@@ -468,6 +710,12 @@ async function runMemoryAgent({ conversationId, topic, newEntries, totalTurns, c
     client,
     model
   });
+  await maybeCreateTierCompactions({
+    conversationId,
+    topic,
+    client,
+    model
+  });
 
   return getMemoryStats(conversationId);
 }
@@ -484,13 +732,22 @@ function groupSemanticItems(semantic) {
 function getCompressedMemory(conversationId) {
   const tokens = getTopMemoryTokens(conversationId, MEMORY_PROMPT_TOKEN_LIMIT);
   const summaries = getRecentSummaries(conversationId, MEMORY_SUMMARY_LIMIT);
+  const mesoSummaries = getRecentTierSummaries(conversationId, "meso", MEMORY_PROMPT_MESO_LIMIT);
+  const macroSummaries = getRecentTierSummaries(conversationId, "macro", MEMORY_PROMPT_MACRO_LIMIT);
   const semantic = getTopSemanticItems(conversationId, MEMORY_PROMPT_SEMANTIC_LIMIT);
+  const conflicts = getConflictLedger(conversationId, MEMORY_PROMPT_CONFLICT_LIMIT);
   const stats = getMemoryStats(conversationId);
 
   return {
     tokens,
     summaries,
+    tierSummaries: {
+      micro: summaries,
+      meso: mesoSummaries,
+      macro: macroSummaries
+    },
     semantic,
+    conflicts,
     groupedSemantic: groupSemanticItems(semantic),
     stats
   };
@@ -510,15 +767,31 @@ function buildContextBlock({ topic, transcript, memory, moderatorDirective, char
   const recentTurns = transcript.slice(-10);
   const tokenLine = (memory.tokens || []).map((item) => item.token).join(", ");
   const summaries = memory.summaries || [];
+  const tiers = memory.tierSummaries || {
+    micro: summaries,
+    meso: [],
+    macro: []
+  };
   const grouped = memory.groupedSemantic || {
     decisions: [],
     constraints: [],
     definitions: [],
     openQuestions: []
   };
+  const conflicts = memory.conflicts || [];
 
   const summaryLines = summaries.map(
     (summary, idx) => `S${idx + 1} (turns ${summary.startTurn}-${summary.endTurn}): ${summary.summary}`
+  );
+  const mesoLines = (tiers.meso || []).map(
+    (summary, idx) => `M${idx + 1} (turns ${summary.startTurn}-${summary.endTurn}): ${summary.summary}`
+  );
+  const macroLines = (tiers.macro || []).map(
+    (summary, idx) => `X${idx + 1} (turns ${summary.startTurn}-${summary.endTurn}): ${summary.summary}`
+  );
+  const conflictLines = conflicts.map(
+    (item, idx) =>
+      `${idx + 1}. (${item.status || "open"}, conf ${Number(item.confidence || 0).toFixed(2)}) ${item.itemA} <> ${item.itemB}`
   );
   const recentTranscript = recentTurns
     .map((entry) => `${entry.speaker}: ${entry.text}`)
@@ -544,6 +817,12 @@ function buildContextBlock({ topic, transcript, memory, moderatorDirective, char
     summaryLines.length > 0
       ? ["Summary memory:", ...summaryLines].join("\n")
       : "Summary memory: (no summary snapshots yet)",
+    mesoLines.length > 0
+      ? ["Meso memory:", ...mesoLines].join("\n")
+      : "Meso memory: (no meso compaction yet)",
+    macroLines.length > 0
+      ? ["Macro memory:", ...macroLines].join("\n")
+      : "Macro memory: (no macro compaction yet)",
     "Semantic memory: decisions",
     formatSemanticLines(grouped.decisions),
     "Semantic memory: constraints",
@@ -552,6 +831,7 @@ function buildContextBlock({ topic, transcript, memory, moderatorDirective, char
     formatSemanticLines(grouped.definitions),
     "Semantic memory: open questions",
     formatSemanticLines(grouped.openQuestions),
+    conflictLines.length > 0 ? ["Conflict ledger:", ...conflictLines].join("\n") : "Conflict ledger: (none detected)",
     moderatorDirective
       ? `Moderator directive: ${moderatorDirective}`
       : "Moderator directive: continue depth-first reasoning and avoid repetition.",

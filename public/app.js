@@ -46,6 +46,9 @@ const memoryInspectorStatusEl = document.querySelector("#memory-inspector-status
 const memoryTokenListEl = document.querySelector("#memory-token-list");
 const memorySemanticListEl = document.querySelector("#memory-semantic-list");
 const memorySummaryListEl = document.querySelector("#memory-summary-list");
+const memoryMesoListEl = document.querySelector("#memory-meso-list");
+const memoryMacroListEl = document.querySelector("#memory-macro-list");
+const memoryConflictListEl = document.querySelector("#memory-conflict-list");
 const insightStatusEl = document.querySelector("#insight-status");
 const insightDecisionsListEl = document.querySelector("#insight-decisions-list");
 const insightQuestionsListEl = document.querySelector("#insight-questions-list");
@@ -310,9 +313,15 @@ function clearMemoryInspector(message = "Start or restore a thread to inspect me
   memoryTokenListEl.innerHTML = "";
   memorySemanticListEl.innerHTML = "";
   memorySummaryListEl.innerHTML = "";
+  memoryMesoListEl.innerHTML = "";
+  memoryMacroListEl.innerHTML = "";
+  memoryConflictListEl.innerHTML = "";
   memoryTokenListEl.appendChild(createListEmpty("No tokens yet."));
   memorySemanticListEl.appendChild(createListEmpty("No semantic items yet."));
-  memorySummaryListEl.appendChild(createListEmpty("No summaries yet."));
+  memorySummaryListEl.appendChild(createListEmpty("No micro summaries yet."));
+  memoryMesoListEl.appendChild(createListEmpty("No meso summaries yet."));
+  memoryMacroListEl.appendChild(createListEmpty("No macro summaries yet."));
+  memoryConflictListEl.appendChild(createListEmpty("No conflicts logged."));
   setMemoryInspectorStatus(message);
 }
 
@@ -420,10 +429,10 @@ function renderSemanticMemory(semantic) {
   }
 }
 
-function renderSummaryMemory(summaries) {
-  memorySummaryListEl.innerHTML = "";
+function renderSummaryTier(container, summaries, emptyText) {
+  container.innerHTML = "";
   if (!summaries.length) {
-    memorySummaryListEl.appendChild(createListEmpty("No summaries yet."));
+    container.appendChild(createListEmpty(emptyText));
     return;
   }
 
@@ -441,7 +450,34 @@ function renderSummaryMemory(summaries) {
 
     li.appendChild(title);
     li.appendChild(meta);
-    memorySummaryListEl.appendChild(li);
+    container.appendChild(li);
+  }
+}
+
+function renderConflictLedger(conflicts) {
+  memoryConflictListEl.innerHTML = "";
+  if (!conflicts.length) {
+    memoryConflictListEl.appendChild(createListEmpty("No conflicts logged."));
+    return;
+  }
+
+  for (const conflict of conflicts) {
+    const li = document.createElement("li");
+    li.className = "memory-item";
+
+    const title = document.createElement("span");
+    title.className = "memory-item-title";
+    title.textContent = `${conflict.itemA || "(item A)"} <> ${conflict.itemB || "(item B)"}`;
+
+    const meta = document.createElement("span");
+    meta.className = "memory-item-meta";
+    meta.textContent = `${conflict.status || "open"} • conf ${Number(conflict.confidence || 0).toFixed(2)} • seen ${
+      conflict.occurrences || 0
+    }`;
+
+    li.appendChild(title);
+    li.appendChild(meta);
+    memoryConflictListEl.appendChild(li);
   }
 }
 
@@ -456,13 +492,16 @@ function renderMemoryInspector(memoryEnvelope) {
 
   renderTokenMemory(memory.tokens || []);
   renderSemanticMemory(memory.semantic || []);
-  renderSummaryMemory(memory.summaries || []);
+  renderSummaryTier(memorySummaryListEl, memory.summaries || [], "No micro summaries yet.");
+  renderSummaryTier(memoryMesoListEl, memory?.tierSummaries?.meso || [], "No meso summaries yet.");
+  renderSummaryTier(memoryMacroListEl, memory?.tierSummaries?.macro || [], "No macro summaries yet.");
+  renderConflictLedger(memory.conflicts || []);
 
   const stats = memory.stats || {};
   setMemoryInspectorStatus(
-    `${Number(stats.tokenCount || 0)} tokens • ${Number(stats.semanticCount || 0)} semantic • ${Number(
-      stats.summaryCount || 0
-    )} summaries`
+    `${Number(stats.tokenCount || 0)} tokens • micro ${Number(stats.summaryCount || 0)} • meso ${Number(
+      stats.mesoSummaryCount || 0
+    )} • macro ${Number(stats.macroSummaryCount || 0)} • conflicts ${Number(stats.conflictCount || 0)}`
   );
 }
 
@@ -1033,8 +1072,10 @@ function setMemoryChip(memory) {
 
   const tokens = Number(memoryState.tokenCount || 0);
   const summaries = Number(memoryState.summaryCount || 0);
+  const meso = Number(memoryState.mesoSummaryCount || 0);
+  const macro = Number(memoryState.macroSummaryCount || 0);
   const semantic = Number(memoryState.semanticCount || 0);
-  memoryChipEl.textContent = `Memory: ${tokens} tokens • ${summaries} summaries • ${semantic} semantic`;
+  memoryChipEl.textContent = `Memory: ${tokens} tokens • ${summaries}/${meso}/${macro} tiers • ${semantic} semantic`;
 }
 
 function setQualityChip(quality) {

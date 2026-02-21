@@ -120,6 +120,33 @@ db.exec(`
     UNIQUE(conversation_id, turn, claim_text, citation_url)
   );
 
+  CREATE TABLE IF NOT EXISTS tier_summaries (
+    conversation_id TEXT NOT NULL,
+    tier TEXT NOT NULL,
+    start_turn INTEGER NOT NULL,
+    end_turn INTEGER NOT NULL,
+    summary TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (conversation_id, tier, start_turn, end_turn),
+    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE IF NOT EXISTS conflict_ledger (
+    conversation_id TEXT NOT NULL,
+    issue_key TEXT NOT NULL,
+    item_a TEXT NOT NULL,
+    item_b TEXT NOT NULL,
+    confidence REAL NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'open',
+    first_turn INTEGER NOT NULL DEFAULT 0,
+    last_turn INTEGER NOT NULL DEFAULT 0,
+    occurrences INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (conversation_id, issue_key),
+    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+  );
+
   CREATE INDEX IF NOT EXISTS idx_memory_tokens_conversation_weight
     ON memory_tokens(conversation_id, weight DESC, last_turn DESC);
 
@@ -134,6 +161,12 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_claim_citations_turn
     ON claim_citations(conversation_id, turn DESC, confidence DESC);
+
+  CREATE INDEX IF NOT EXISTS idx_tier_summaries_recent
+    ON tier_summaries(conversation_id, tier, end_turn DESC);
+
+  CREATE INDEX IF NOT EXISTS idx_conflict_ledger_recent
+    ON conflict_ledger(conversation_id, confidence DESC, last_turn DESC);
 `);
 
 function ensureColumnExists(tableName, columnName, typeSql) {
@@ -420,11 +453,14 @@ const getMemoryStatsStmt = db.prepare(`
     COALESCE((SELECT COUNT(*) FROM memory_tokens WHERE conversation_id = @conversationId), 0) AS tokenCount,
     COALESCE((SELECT COUNT(*) FROM conversation_summaries WHERE conversation_id = @conversationId), 0) AS summaryCount,
     COALESCE((SELECT MAX(end_turn) FROM conversation_summaries WHERE conversation_id = @conversationId), 0) AS lastSummaryTurn,
+    COALESCE((SELECT COUNT(*) FROM tier_summaries WHERE conversation_id = @conversationId AND tier = 'meso'), 0) AS mesoSummaryCount,
+    COALESCE((SELECT COUNT(*) FROM tier_summaries WHERE conversation_id = @conversationId AND tier = 'macro'), 0) AS macroSummaryCount,
     COALESCE((SELECT COUNT(*) FROM semantic_memory WHERE conversation_id = @conversationId), 0) AS semanticCount,
     COALESCE((SELECT COUNT(*) FROM semantic_memory WHERE conversation_id = @conversationId AND item_type = 'decision'), 0) AS decisionCount,
     COALESCE((SELECT COUNT(*) FROM semantic_memory WHERE conversation_id = @conversationId AND item_type = 'open_question'), 0) AS openQuestionCount,
     COALESCE((SELECT COUNT(*) FROM semantic_memory WHERE conversation_id = @conversationId AND item_type = 'constraint'), 0) AS constraintCount,
-    COALESCE((SELECT COUNT(*) FROM semantic_memory WHERE conversation_id = @conversationId AND item_type = 'definition'), 0) AS definitionCount
+    COALESCE((SELECT COUNT(*) FROM semantic_memory WHERE conversation_id = @conversationId AND item_type = 'definition'), 0) AS definitionCount,
+    COALESCE((SELECT COUNT(*) FROM conflict_ledger WHERE conversation_id = @conversationId), 0) AS conflictCount
 `);
 
 const getLastSummaryTurnStmt = db.prepare(`
@@ -535,6 +571,95 @@ const listRecentClaimCitationsStmt = db.prepare(`
   LIMIT ?
 `);
 
+const insertTierSummaryStmt = db.prepare(`
+  INSERT OR IGNORE INTO tier_summaries (
+    conversation_id,
+    tier,
+    start_turn,
+    end_turn,
+    summary
+  )
+  VALUES (@conversationId, @tier, @startTurn, @endTurn, @summary)
+`);
+
+const listRecentTierSummariesStmt = db.prepare(`
+  SELECT
+    tier,
+    start_turn AS startTurn,
+    end_turn AS endTurn,
+    summary,
+    created_at AS createdAt
+  FROM tier_summaries
+  WHERE conversation_id = ?
+    AND tier = ?
+  ORDER BY end_turn DESC
+  LIMIT ?
+`);
+
+const upsertConflictLedgerStmt = db.prepare(`
+  INSERT INTO conflict_ledger (
+    conversation_id,
+    issue_key,
+    item_a,
+    item_b,
+    confidence,
+    status,
+    first_turn,
+    last_turn,
+    occurrences
+  )
+  VALUES (
+    @conversationId,
+    @issueKey,
+    @itemA,
+    @itemB,
+    @confidence,
+    @status,
+    @firstTurn,
+    @lastTurn,
+    @occurrences
+  )
+  ON CONFLICT(conversation_id, issue_key) DO UPDATE SET
+    item_a = excluded.item_a,
+    item_b = excluded.item_b,
+    confidence = MAX(conflict_ledger.confidence, excluded.confidence),
+    status = excluded.status,
+    first_turn = MIN(conflict_ledger.first_turn, excluded.first_turn),
+    last_turn = MAX(conflict_ledger.last_turn, excluded.last_turn),
+    occurrences = conflict_ledger.occurrences + excluded.occurrences,
+    updated_at = CURRENT_TIMESTAMP
+`);
+
+const pruneConflictLedgerStmt = db.prepare(`
+  DELETE FROM conflict_ledger
+  WHERE conversation_id = @conversationId
+    AND issue_key IN (
+      SELECT issue_key
+      FROM conflict_ledger
+      WHERE conversation_id = @conversationId
+      ORDER BY confidence DESC, last_turn DESC, issue_key ASC
+      LIMIT -1 OFFSET @keepLimit
+    )
+`);
+
+const listConflictLedgerStmt = db.prepare(`
+  SELECT
+    issue_key AS issueKey,
+    item_a AS itemA,
+    item_b AS itemB,
+    confidence,
+    status,
+    first_turn AS firstTurn,
+    last_turn AS lastTurn,
+    occurrences,
+    created_at AS createdAt,
+    updated_at AS updatedAt
+  FROM conflict_ledger
+  WHERE conversation_id = ?
+  ORDER BY confidence DESC, last_turn DESC
+  LIMIT ?
+`);
+
 const insertMessagesTx = db.transaction((conversationId, entries) => {
   for (const entry of entries) {
     insertMessageStmt.run({
@@ -616,6 +741,22 @@ const insertClaimCitationsTx = db.transaction((conversationId, entries) => {
       citationTitle: entry.citationTitle || "",
       citationUrl: entry.citationUrl || "",
       confidence: Number(entry.confidence || 0)
+    });
+  }
+});
+
+const upsertConflictLedgerTx = db.transaction((conversationId, entries) => {
+  for (const entry of entries) {
+    upsertConflictLedgerStmt.run({
+      conversationId,
+      issueKey: entry.issueKey,
+      itemA: entry.itemA,
+      itemB: entry.itemB,
+      confidence: Number(entry.confidence || 0),
+      status: entry.status || "open",
+      firstTurn: Number(entry.firstTurn || 0),
+      lastTurn: Number(entry.lastTurn || 0),
+      occurrences: Number(entry.occurrences || 1)
     });
   }
 });
@@ -808,6 +949,79 @@ function getRecentClaimCitations(conversationId, limit = 60) {
   return listRecentClaimCitationsStmt.all(conversationId, safeLimit);
 }
 
+function insertTierSummary(conversationId, tier, startTurn, endTurn, summary) {
+  const safeTier = String(tier || "")
+    .trim()
+    .toLowerCase();
+  if (!["meso", "macro"].includes(safeTier)) {
+    return;
+  }
+
+  const text = String(summary || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 900);
+  if (!text) {
+    return;
+  }
+
+  insertTierSummaryStmt.run({
+    conversationId,
+    tier: safeTier,
+    startTurn: Math.max(0, Math.trunc(Number(startTurn) || 0)),
+    endTurn: Math.max(0, Math.trunc(Number(endTurn) || 0)),
+    summary: text
+  });
+}
+
+function getRecentTierSummaries(conversationId, tier, limit = 6) {
+  const safeTier = String(tier || "")
+    .trim()
+    .toLowerCase();
+  if (!["meso", "macro"].includes(safeTier)) {
+    return [];
+  }
+
+  const safeLimit = Math.max(1, Math.min(80, Number(limit) || 6));
+  const rows = listRecentTierSummariesStmt.all(conversationId, safeTier, safeLimit);
+  return rows.reverse();
+}
+
+function upsertConflictLedger(conversationId, entries) {
+  if (!Array.isArray(entries) || entries.length === 0) {
+    return;
+  }
+
+  const prepared = entries
+    .map((entry) => ({
+      issueKey: String(entry.issueKey || "").trim().slice(0, 240),
+      itemA: String(entry.itemA || "").replace(/\s+/g, " ").trim().slice(0, 260),
+      itemB: String(entry.itemB || "").replace(/\s+/g, " ").trim().slice(0, 260),
+      confidence: Number(entry.confidence || 0),
+      status: String(entry.status || "open").trim().slice(0, 20),
+      firstTurn: Number(entry.firstTurn || 0),
+      lastTurn: Number(entry.lastTurn || 0),
+      occurrences: Number(entry.occurrences || 1)
+    }))
+    .filter((entry) => entry.issueKey && entry.itemA && entry.itemB);
+
+  if (!prepared.length) {
+    return;
+  }
+
+  upsertConflictLedgerTx(conversationId, prepared);
+}
+
+function pruneConflictLedger(conversationId, keepLimit = 120) {
+  const safeKeepLimit = Math.max(20, Math.min(500, Number(keepLimit) || 120));
+  pruneConflictLedgerStmt.run({ conversationId, keepLimit: safeKeepLimit });
+}
+
+function getConflictLedger(conversationId, limit = 24) {
+  const safeLimit = Math.max(1, Math.min(240, Number(limit) || 24));
+  return listConflictLedgerStmt.all(conversationId, safeLimit);
+}
+
 function getMemoryStats(conversationId) {
   return getMemoryStatsStmt.get({ conversationId });
 }
@@ -842,8 +1056,10 @@ export {
   getConversation,
   getConversationBrief,
   getConversationAgents,
+  getConflictLedger,
   getRecentClaimCitations,
   getRecentRetrievalSources,
+  getRecentTierSummaries,
   getLastSummaryTurn,
   getMemoryStats,
   getMessages,
@@ -854,13 +1070,16 @@ export {
   getTopSemanticItems,
   insertMessages,
   insertClaimCitations,
+  insertTierSummary,
   insertSummary,
   listConversations,
+  pruneConflictLedger,
   pruneMemoryTokens,
   pruneSemanticItems,
   updateConversationMeta,
   upsertConversationBrief,
   upsertConversationAgents,
+  upsertConflictLedger,
   upsertMemoryTokens,
   upsertRetrievalSources,
   upsertSemanticItems
